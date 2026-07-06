@@ -1,6 +1,11 @@
 package main
 
 import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/server"
@@ -15,7 +20,16 @@ func main() {
 
 	s := server.New(logger)
 
-	if err := s.Run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Повторный сигнал завершает процесс сразу, не дожидаясь graceful shutdown
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
+	if err := s.Run(ctx); err != nil {
 		logger.Fatal("Сервер завершился с ошибкой", zap.Error(err))
 	}
 }
