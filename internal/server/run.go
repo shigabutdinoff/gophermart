@@ -1,9 +1,13 @@
 package server
 
-import "go.uber.org/zap"
+import (
+	"context"
 
-// Run работает, пока сервер не завершится с ошибкой.
-func (s *Server) Run() error {
+	"go.uber.org/zap"
+)
+
+// Run работает до отмены контекста, затем останавливается за shutdownTimeout.
+func (s *Server) Run(ctx context.Context) error {
 	if s.ln == nil {
 		if err := s.listen(); err != nil {
 			return err
@@ -17,7 +21,18 @@ func (s *Server) Run() error {
 	}
 	s.srv = srv
 
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.srv.Serve(s.ln)
+	}()
 	s.logger.Info("Сервер запущен", zap.String("address", s.Addr()))
 
-	return s.srv.Serve(s.ln)
+	select {
+	case err := <-errCh:
+		_ = s.srv.Close()
+		return err
+	case <-ctx.Done():
+	}
+
+	return s.shutdown(errCh)
 }
