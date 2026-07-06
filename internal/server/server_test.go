@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+
+	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 )
 
 func startServer(t *testing.T, ctx context.Context, s *Server) <-chan error {
@@ -37,16 +39,16 @@ func waitDone(t *testing.T, done <-chan error) error {
 }
 
 func TestNew(t *testing.T) {
-	s := New(zap.NewNop())
+	s := New(zap.NewNop(), config.Default())
 
-	assert.Equal(t, DefaultRunAddress, s.RunAddress)
+	assert.Equal(t, config.DefaultRunAddress, s.RunAddress)
 	assert.Equal(t, DefaultShutdownTimeout, s.shutdownTimeout)
 	assert.NotNil(t, s.router)
 }
 
 func TestServer_ServesAndLogsStart(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
-	s := New(zap.New(core))
+	s := New(zap.New(core), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 
 	r := chi.NewRouter()
@@ -86,7 +88,7 @@ func TestServer_GracefulShutdownWaitsForActiveRequest(t *testing.T) {
 	})
 
 	core, logs := observer.New(zap.InfoLevel)
-	s := New(zap.New(core))
+	s := New(zap.New(core), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 	s.router = r
 
@@ -145,7 +147,7 @@ func TestServer_ForcesShutdownAfterTimeout(t *testing.T) {
 	})
 
 	core, logs := observer.New(zap.InfoLevel)
-	s := New(zap.New(core))
+	s := New(zap.New(core), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 	s.shutdownTimeout = 100 * time.Millisecond
 	s.router = r
@@ -171,7 +173,7 @@ func TestServer_ForcesShutdownAfterTimeout(t *testing.T) {
 
 func TestServer_ServeErrorReturnedNotLogged(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
-	s := New(zap.New(core))
+	s := New(zap.New(core), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 	s.router = chi.NewRouter()
 
@@ -197,7 +199,7 @@ func TestServer_ServeFailureClosesActiveConnections(t *testing.T) {
 		<-release
 	})
 
-	s := New(zap.NewNop())
+	s := New(zap.NewNop(), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 	s.router = r
 
@@ -231,13 +233,13 @@ func TestServer_Run_AddressBusy(t *testing.T) {
 	require.NoError(t, err)
 	defer ln.Close()
 
-	s := New(zap.NewNop())
+	s := New(zap.NewNop(), config.Default())
 	s.RunAddress = ln.Addr().String()
 	require.Error(t, s.Run(context.Background()))
 }
 
 func TestServer_Run_InvalidAddress(t *testing.T) {
-	s := New(zap.NewNop())
+	s := New(zap.NewNop(), config.Default())
 	s.RunAddress = "bad::addr"
 	require.Error(t, s.Run(context.Background()))
 }
