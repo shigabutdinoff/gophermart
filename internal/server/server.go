@@ -25,7 +25,13 @@ import (
 	userrepository "github.com/shigabutdinoff/gophermart/internal/repository/user"
 )
 
-const DefaultShutdownTimeout = 10 * time.Second
+const (
+	DefaultShutdownTimeout   = 10 * time.Second
+	DefaultReadHeaderTimeout = 5 * time.Second
+	DefaultReadTimeout       = 30 * time.Second
+	DefaultWriteTimeout      = 30 * time.Second
+	DefaultIdleTimeout       = 60 * time.Second
+)
 
 type Server struct {
 	router          *chi.Mux
