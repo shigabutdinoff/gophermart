@@ -7,10 +7,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
+
+	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 )
 
 const (
-	DefaultRunAddress        = "localhost:8080"
 	DefaultShutdownTimeout   = 10 * time.Second
 	DefaultReadHeaderTimeout = 5 * time.Second
 	DefaultReadTimeout       = 30 * time.Second
@@ -22,18 +23,18 @@ const (
 type Server struct {
 	router          *chi.Mux
 	logger          *zap.Logger
-	RunAddress      string
 	shutdownTimeout time.Duration
 	ln              net.Listener
 	srv             *http.Server
+	config.Config
 }
 
-// New создаёт сервер с параметрами по умолчанию.
-func New(logger *zap.Logger) *Server {
+// New создаёт сервер с переданной конфигурацией.
+func New(logger *zap.Logger, cfg config.Config) *Server {
 	s := &Server{
 		logger:          logger,
-		RunAddress:      DefaultRunAddress,
 		shutdownTimeout: DefaultShutdownTimeout,
+		Config:          cfg,
 	}
 	s.setupRoutes()
 	return s
