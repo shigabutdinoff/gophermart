@@ -245,6 +245,40 @@ func TestServer_Run_InvalidAddress(t *testing.T) {
 	require.Error(t, s.Run(context.Background()))
 }
 
+func TestRouter_PanicRecovered(t *testing.T) {
+	s := New(zap.NewNop(), config.Default())
+	s.router.Get("/panic", func(http.ResponseWriter, *http.Request) { panic("boom") })
+	srv := httptest.NewServer(s.router)
+	defer srv.Close()
+
+	resp, err := srv.Client().Get(srv.URL + "/panic")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+	resp2, err := srv.Client().Get(srv.URL + "/api/unknown")
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp2.StatusCode)
+}
+
+func TestRouter_PanicMidResponseAbortsConnection(t *testing.T) {
+	s := New(zap.NewNop(), config.Default())
+	s.router.Get("/broken", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("partial"))
+		panic("boom")
+	})
+	srv := httptest.NewServer(s.router)
+	defer srv.Close()
+
+	resp, err := srv.Client().Get(srv.URL + "/broken")
+	if err == nil {
+		defer resp.Body.Close()
+		_, err = io.ReadAll(resp.Body)
+	}
+	assert.Error(t, err)
+}
+
 func TestRouter_LogsEveryRequest(t *testing.T) {
 	core, observed := observer.New(zap.InfoLevel)
 	s := New(zap.New(core), config.Default())
