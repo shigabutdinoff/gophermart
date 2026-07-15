@@ -1,41 +1,39 @@
 package compress
 
-import (
-	"compress/gzip"
-	"net/http"
-)
+import "net/http"
 
-// compressWriter сжимает тело ответа в gzip.
+// compressWriter откладывает заголовок и по началу тела решает, сжимать ли.
 type compressWriter struct {
-	w     http.ResponseWriter
-	zw    *gzip.Writer
-	wrote bool
+	w           http.ResponseWriter
+	sink        gzipSink
+	status      int
+	wroteHeader bool
 }
 
 func newCompressWriter(w http.ResponseWriter) *compressWriter {
-	return &compressWriter{w: w, zw: gzip.NewWriter(w)}
+	return &compressWriter{w: w}
 }
 
 func (c *compressWriter) Header() http.Header {
 	return c.w.Header()
 }
 
+// Unwrap открывает http.ResponseController путь к нижележащему writer.
+func (c *compressWriter) Unwrap() http.ResponseWriter {
+	return c.w
+}
+
 func (c *compressWriter) WriteHeader(statusCode int) {
-	if c.wrote {
+	if c.wroteHeader || c.status != 0 {
 		return
 	}
-	c.wrote = true
-	c.w.Header().Set("Content-Encoding", "gzip")
-	c.w.WriteHeader(statusCode)
-}
-
-func (c *compressWriter) Write(p []byte) (int, error) {
-	if !c.wrote {
-		c.WriteHeader(http.StatusOK)
+	if statusCode < 200 {
+		c.w.WriteHeader(statusCode)
+		return
 	}
-	return c.zw.Write(p)
+	c.status = statusCode
 }
 
-func (c *compressWriter) Close() error {
-	return c.zw.Close()
+func (c *compressWriter) release() {
+	c.sink.release()
 }
