@@ -12,7 +12,7 @@ func acceptsGzip(header string) bool {
 		name, params, _ := strings.Cut(coding, ";")
 		name = strings.TrimSpace(name)
 		switch {
-		case strings.EqualFold(name, "gzip"), strings.EqualFold(name, "x-gzip"):
+		case isGzipName(name):
 			return acceptableQ(params)
 		case name == "*":
 			wildcard = acceptableQ(params)
