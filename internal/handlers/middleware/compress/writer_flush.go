@@ -11,7 +11,7 @@ func (c *compressWriter) flushHeader(body []byte) {
 		c.status = http.StatusOK
 	}
 	encoded := c.w.Header().Get("Content-Encoding") != ""
-	if len(body) > 0 && !encoded {
+	if len(body) > 0 && !encoded && compressibleStatus(c.status) {
 		c.sink.enable(c.w)
 		c.w.Header().Set("Content-Encoding", "gzip")
 		c.w.Header().Del("Content-Length")

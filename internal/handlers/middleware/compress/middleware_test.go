@@ -137,6 +137,46 @@ func TestGzipMiddleware_CompressesAfterEmptyWrite(t *testing.T) {
 	assert.JSONEq(t, `{"status":"ok"}`, string(body))
 }
 
+func TestGzipMiddleware_SniffsContentType(t *testing.T) {
+	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+
+	plainResp := do(t, h, "")
+	defer plainResp.Body.Close()
+	gzipResp := do(t, h, "gzip")
+	defer gzipResp.Body.Close()
+
+	plain := plainResp.Header.Get("Content-Type")
+	assert.NotEmpty(t, plain)
+	assert.Equal(t, plain, gzipResp.Header.Get("Content-Type"))
+}
+
+func TestGzipMiddleware_ErrorResponseNotCompressed(t *testing.T) {
+	for _, status := range []int{
+		http.StatusMovedPermanently,
+		http.StatusBadRequest,
+		http.StatusInternalServerError,
+	} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte("oops"))
+			}))
+
+			resp := do(t, h, "gzip")
+			defer resp.Body.Close()
+
+			require.Equal(t, status, resp.StatusCode)
+			assert.Empty(t, resp.Header.Get("Content-Encoding"))
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Equal(t, "oops", string(body))
+		})
+	}
+}
+
 type headerSpy struct {
 	http.ResponseWriter
 	wrote bool
