@@ -19,6 +19,14 @@ func (c *compressWriter) flushHeader(body []byte) {
 	c.w.WriteHeader(c.status)
 }
 
+func (c *compressWriter) Flush() {
+	if !c.wroteHeader {
+		c.flushHeader(nil)
+	}
+	c.sink.flush()
+	_ = http.NewResponseController(c.w).Flush()
+}
+
 func (c *compressWriter) Close() error {
 	if c.status != 0 {
 		c.flushHeader(nil)
