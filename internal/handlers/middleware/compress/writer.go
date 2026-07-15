@@ -5,6 +5,7 @@ import "net/http"
 // compressWriter откладывает заголовок и по началу тела решает, сжимать ли.
 type compressWriter struct {
 	w           http.ResponseWriter
+	sniff       sniffer
 	sink        gzipSink
 	status      int
 	wroteHeader bool
@@ -24,7 +25,7 @@ func (c *compressWriter) Unwrap() http.ResponseWriter {
 }
 
 func (c *compressWriter) WriteHeader(statusCode int) {
-	if c.wroteHeader || c.status != 0 {
+	if c.wroteHeader || c.status != 0 || c.sniff.buffered() > 0 {
 		return
 	}
 	if statusCode < 200 {

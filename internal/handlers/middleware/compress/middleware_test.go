@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,6 +30,10 @@ func rawClient() *http.Client {
 	return &http.Client{Transport: &http.Transport{DisableCompression: true}}
 }
 
+func bigJSON() string {
+	return `{"status":"ok","padding":"` + strings.Repeat("a", sniffLen) + `"}`
+}
+
 func do(t *testing.T, h http.Handler, accept string) *http.Response {
 	t.Helper()
 
@@ -48,7 +54,7 @@ func do(t *testing.T, h http.Handler, accept string) *http.Response {
 func TestGzipMiddleware_CompressesResponseForGzipClient(t *testing.T) {
 	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(bigJSON()))
 	}))
 
 	resp := do(t, h, "gzip")
@@ -59,7 +65,7 @@ func TestGzipMiddleware_CompressesResponseForGzipClient(t *testing.T) {
 	require.NoError(t, err)
 	body, err := io.ReadAll(zr)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"status":"ok"}`, string(body))
+	assert.JSONEq(t, bigJSON(), string(body))
 }
 
 func TestGzipMiddleware_NoCompressionWithoutAcceptEncoding(t *testing.T) {
@@ -123,7 +129,7 @@ func TestGzipMiddleware_CompressesAfterEmptyWrite(t *testing.T) {
 	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(nil)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(bigJSON()))
 	}))
 
 	resp := do(t, h, "gzip")
@@ -134,7 +140,31 @@ func TestGzipMiddleware_CompressesAfterEmptyWrite(t *testing.T) {
 	require.NoError(t, err)
 	body, err := io.ReadAll(zr)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"status":"ok"}`, string(body))
+	assert.JSONEq(t, bigJSON(), string(body))
+}
+
+func TestGzipMiddleware_SniffsAcrossChunks(t *testing.T) {
+	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<h"))
+		_, _ = w.Write([]byte("tml><body>" + strings.Repeat("привет ", 100) + "</body></html>"))
+	}))
+
+	plainResp := do(t, h, "")
+	defer plainResp.Body.Close()
+	gzipResp := do(t, h, "gzip")
+	defer gzipResp.Body.Close()
+
+	want := plainResp.Header.Get("Content-Type")
+	assert.Contains(t, want, "text/html")
+	assert.Equal(t, want, gzipResp.Header.Get("Content-Type"))
+
+	zr, err := gzip.NewReader(gzipResp.Body)
+	require.NoError(t, err)
+	gzBody, err := io.ReadAll(zr)
+	require.NoError(t, err)
+	plainBody, err := io.ReadAll(plainResp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, plainBody, gzBody)
 }
 
 func TestGzipMiddleware_SniffsContentType(t *testing.T) {
@@ -152,6 +182,43 @@ func TestGzipMiddleware_SniffsContentType(t *testing.T) {
 	assert.Equal(t, plain, gzipResp.Header.Get("Content-Type"))
 }
 
+func TestGzipMiddleware_CompressionThreshold(t *testing.T) {
+	cases := []struct {
+		name string
+		size int
+		want bool
+	}{
+		{"меньше порога", sniffLen - 1, false},
+		{"равно порогу", sniffLen, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/plain")
+				_, _ = w.Write([]byte(strings.Repeat("a", tc.size)))
+			}))
+
+			resp := do(t, h, "gzip")
+			defer resp.Body.Close()
+
+			gzipped := resp.Header.Get("Content-Encoding") == "gzip"
+			assert.Equal(t, tc.want, gzipped)
+
+			var body []byte
+			var err error
+			if gzipped {
+				zr, zerr := gzip.NewReader(resp.Body)
+				require.NoError(t, zerr)
+				body, err = io.ReadAll(zr)
+			} else {
+				body, err = io.ReadAll(resp.Body)
+			}
+			require.NoError(t, err)
+			assert.Len(t, body, tc.size)
+		})
+	}
+}
+
 func TestGzipMiddleware_ErrorResponseNotCompressed(t *testing.T) {
 	for _, status := range []int{
 		http.StatusMovedPermanently,
@@ -162,7 +229,7 @@ func TestGzipMiddleware_ErrorResponseNotCompressed(t *testing.T) {
 			h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(status)
-				_, _ = w.Write([]byte("oops"))
+				_, _ = w.Write([]byte(strings.Repeat("a", sniffLen)))
 			}))
 
 			resp := do(t, h, "gzip")
@@ -172,7 +239,7 @@ func TestGzipMiddleware_ErrorResponseNotCompressed(t *testing.T) {
 			assert.Empty(t, resp.Header.Get("Content-Encoding"))
 			body, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
-			assert.Equal(t, "oops", string(body))
+			assert.Len(t, body, sniffLen)
 		})
 	}
 }
@@ -205,7 +272,7 @@ func TestGzipMiddleware_PanicKeepsBufferedStatusUnsent(t *testing.T) {
 func TestGzipMiddleware_ParsesAcceptEncoding(t *testing.T) {
 	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(bigJSON()))
 	}))
 
 	cases := []struct {
@@ -241,7 +308,7 @@ func TestGzipMiddleware_ParsesAcceptEncoding(t *testing.T) {
 func TestGzipMiddleware_AcceptEncodingAcrossHeaderLines(t *testing.T) {
 	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(bigJSON()))
 	}))
 
 	srv := httptest.NewServer(h)
@@ -353,7 +420,14 @@ func TestGzipMiddleware_SetsVaryHeader(t *testing.T) {
 }
 
 func TestGzipMiddleware_PrecompressedResponseNotReencoded(t *testing.T) {
-	pre := gzipBody(t, "precompressed payload")
+	// Случайные байты не сжимаются, сжатое тело заведомо больше порога
+	rnd := rand.New(rand.NewPCG(3, 4))
+	plain := make([]byte, sniffLen+64)
+	for i := range plain {
+		plain[i] = byte(rnd.UintN(256))
+	}
+	pre := gzipBody(t, string(plain))
+	require.GreaterOrEqual(t, pre.Len(), sniffLen)
 
 	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -369,5 +443,5 @@ func TestGzipMiddleware_PrecompressedResponseNotReencoded(t *testing.T) {
 	require.NoError(t, err)
 	body, err := io.ReadAll(zr)
 	require.NoError(t, err)
-	assert.Equal(t, "precompressed payload", string(body))
+	assert.Equal(t, plain, body)
 }

@@ -2,6 +2,21 @@ package compress
 
 import "net/http"
 
+func (c *compressWriter) flushSniffed() error {
+	body := c.sniff.take()
+	_, err := c.writeDetected(body)
+	return err
+}
+
+// flushPlain отправляет накопленное тело без сжатия, оно меньше порога.
+func (c *compressWriter) flushPlain() error {
+	body := c.sniff.take()
+	ensureContentType(c.w.Header(), body)
+	c.flushHeader(nil)
+	_, err := c.w.Write(body)
+	return err
+}
+
 func (c *compressWriter) flushHeader(body []byte) {
 	if c.wroteHeader {
 		return
@@ -20,7 +35,9 @@ func (c *compressWriter) flushHeader(body []byte) {
 }
 
 func (c *compressWriter) Flush() {
-	if !c.wroteHeader {
+	if c.sniff.buffered() > 0 {
+		_ = c.flushSniffed()
+	} else if !c.wroteHeader {
 		c.flushHeader(nil)
 	}
 	c.sink.flush()
@@ -28,7 +45,11 @@ func (c *compressWriter) Flush() {
 }
 
 func (c *compressWriter) Close() error {
-	if c.status != 0 {
+	if c.sniff.buffered() > 0 {
+		if err := c.flushPlain(); err != nil {
+			return err
+		}
+	} else if c.status != 0 {
 		c.flushHeader(nil)
 	}
 	return c.sink.close()
