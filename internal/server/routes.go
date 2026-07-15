@@ -6,6 +6,7 @@ import (
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/compress"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/logging"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
@@ -23,6 +24,7 @@ func (s *Server) setupRoutes() {
 
 func (s *Server) installMiddleware(router *chi.Mux) {
 	router.Use(logging.WithLogging(s.logger))
+	router.Use(compress.GzipMiddleware)
 }
 
 func (s *Server) registerAPI(router *chi.Mux) {
