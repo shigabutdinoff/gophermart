@@ -16,11 +16,13 @@ func GzipMiddleware(next http.Handler) http.Handler {
 		if strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip") {
 			cw = newCompressWriter(w)
 			ow = cw
+			// При панике писатель возвращается в пул без отправки буфера
+			defer cw.release()
 		}
 
 		next.ServeHTTP(ow, r)
 
-		// Не defer, при панике gzip не закрывается и recovery отвечает 500
+		// Не defer, при панике буфер должен остаться, чтобы recovery ответил 500
 		if cw != nil {
 			_ = cw.Close()
 		}

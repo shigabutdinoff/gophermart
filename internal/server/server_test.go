@@ -281,6 +281,27 @@ func TestRouter_PanicMidResponseAbortsConnection(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestRouter_PanicAfterBufferedStatusAnswers500(t *testing.T) {
+	s := New(zap.NewNop(), config.Default())
+	s.router.Get("/panic", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		panic("boom")
+	})
+	srv := httptest.NewServer(s.router)
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/panic", http.NoBody)
+	require.NoError(t, err)
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	resp, err := rawClient().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("Content-Encoding"))
+}
+
 func TestRouter_LogsEveryRequest(t *testing.T) {
 	core, observed := observer.New(zap.InfoLevel)
 	s := New(zap.New(core), config.Default())
