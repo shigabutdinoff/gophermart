@@ -184,6 +184,65 @@ func TestGzipMiddleware_WriteHeaderAfterWriteIgnored(t *testing.T) {
 	}
 }
 
+func TestGzipMiddleware_FlushSendsCompressedData(t *testing.T) {
+	release := make(chan struct{})
+	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"event":"first"}`))
+		f, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("gzip-обёртка не реализует http.Flusher")
+			return
+		}
+		f.Flush()
+		<-release
+		_, _ = w.Write([]byte(`{"event":"second"}`))
+	}))
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	defer close(release)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, http.NoBody)
+	require.NoError(t, err)
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	resp, err := rawClient().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+
+	zr, err := gzip.NewReader(resp.Body)
+	require.NoError(t, err)
+	buf := make([]byte, len(`{"event":"first"}`))
+	_, err = io.ReadFull(zr, buf)
+	require.NoError(t, err)
+	assert.Equal(t, `{"event":"first"}`, string(buf))
+}
+
+func TestGzipMiddleware_FlushBeforeBodyKeepsResponseValid(t *testing.T) {
+	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		f, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("gzip-обёртка не реализует http.Flusher")
+			return
+		}
+		f.Flush()
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+
+	resp := do(t, h, "gzip")
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
+	assert.JSONEq(t, `{"status":"ok"}`, string(body))
+}
+
 func TestGzipMiddleware_SetsVaryHeader(t *testing.T) {
 	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))

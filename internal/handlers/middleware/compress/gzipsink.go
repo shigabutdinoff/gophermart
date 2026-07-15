@@ -22,6 +22,12 @@ func (g *gzipSink) enable(w io.Writer) {
 	g.on = true
 }
 
+func (g *gzipSink) flush() {
+	if g.on {
+		_ = g.zw.Flush()
+	}
+}
+
 func (g *gzipSink) close() error {
 	if !g.on {
 		return nil
