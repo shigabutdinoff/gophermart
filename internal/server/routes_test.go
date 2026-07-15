@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/bodylimit"
 )
 
 func newTestServer(t *testing.T, logger *zap.Logger, cfg config.Config) (*Server, *httptest.Server) {
@@ -240,6 +242,90 @@ func TestRouter_BadGzipBodyRejected(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestRouter_RejectsGzipBombByUncompressedSize(t *testing.T) {
+	s, srv := newTestServer(t, zap.NewNop(), config.Default())
+	s.router.Post("/echo", func(w http.ResponseWriter, req *http.Request) {
+		if _, ok := bodylimit.ReadAll(w, req); !ok {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var bomb bytes.Buffer
+	zw := gzip.NewWriter(&bomb)
+	_, err := zw.Write(make([]byte, s.RequestBodyLimit+1))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/echo", &bomb)
+	require.NoError(t, err)
+	req.Header.Set("Content-Encoding", "gzip")
+
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+func TestRouter_AcceptsBodyWithCompressedLengthAboveLimit(t *testing.T) {
+	cfg := config.Default()
+	cfg.RequestBodyLimit = 64
+	s, srv := newTestServer(t, zap.NewNop(), cfg)
+	s.router.Post("/echo", func(w http.ResponseWriter, req *http.Request) {
+		if _, ok := bodylimit.ReadAll(w, req); !ok {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Случайные байты не сжимаются, gzip делает их только длиннее
+	rnd := rand.New(rand.NewPCG(1, 2))
+	raw := make([]byte, s.RequestBodyLimit-4)
+	for i := range raw {
+		raw[i] = byte(rnd.UintN(256))
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, err := zw.Write(raw)
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	require.Greater(t, int64(buf.Len()), s.RequestBodyLimit)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/echo", &buf)
+	require.NoError(t, err)
+	req.Header.Set("Content-Encoding", "gzip")
+
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestRouter_RejectsHugeBodyByContentLength(t *testing.T) {
+	s, srv := newTestServer(t, zap.NewNop(), config.Default())
+	called := false
+	s.router.Post("/echo", func(w http.ResponseWriter, req *http.Request) {
+		called = true
+		if _, ok := bodylimit.ReadAll(w, req); !ok {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	body := bytes.NewReader(make([]byte, s.RequestBodyLimit+1))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/echo", body)
+	require.NoError(t, err)
+
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	assert.False(t, called)
 }
 
 func gzipBody(t *testing.T, s string) *bytes.Buffer {

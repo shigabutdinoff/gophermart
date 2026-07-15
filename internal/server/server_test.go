@@ -43,7 +43,13 @@ func TestNew(t *testing.T) {
 
 	assert.Equal(t, config.DefaultRunAddress, s.RunAddress)
 	assert.Equal(t, DefaultShutdownTimeout, s.shutdownTimeout)
+	assert.Equal(t, config.DefaultRequestBodyLimit, s.RequestBodyLimit)
 	assert.NotNil(t, s.router)
+}
+
+func TestServer_AddrBeforeListen(t *testing.T) {
+	s := New(zap.NewNop(), config.Default())
+	assert.Empty(t, s.Addr())
 }
 
 func TestServer_ServesAndLogsStart(t *testing.T) {

@@ -14,5 +14,8 @@ func (s *Server) listen() error {
 
 // Addr возвращает фактический адрес прослушивания (важно при порте 0 в тестах).
 func (s *Server) Addr() string {
+	if s.ln == nil {
+		return ""
+	}
 	return s.ln.Addr().String()
 }
