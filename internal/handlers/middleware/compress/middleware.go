@@ -13,7 +13,9 @@ func GzipMiddleware(next http.Handler) http.Handler {
 		ow := w
 
 		var cw *compressWriter
-		if strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip") {
+		// Заголовок может прийти в несколько строк, Get видит только первую
+		accept := strings.Join(r.Header.Values("Accept-Encoding"), ",")
+		if acceptsGzip(accept) {
 			cw = newCompressWriter(w)
 			ow = cw
 			// При панике писатель возвращается в пул без отправки буфера

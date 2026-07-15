@@ -162,6 +162,63 @@ func TestGzipMiddleware_PanicKeepsBufferedStatusUnsent(t *testing.T) {
 	assert.False(t, spy.wrote)
 }
 
+func TestGzipMiddleware_ParsesAcceptEncoding(t *testing.T) {
+	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+
+	cases := []struct {
+		accept string
+		want   bool
+	}{
+		{"gzip;q=0", false},
+		{"gzip; q=0", false},
+		{"gzip;q=0.0", false},
+		{"deflate, gzip;q=0", false},
+		{"gzip", true},
+		{"gzip;q=1.0", true},
+		{"deflate, gzip;q=0.5", true},
+		{"GZIP", true},
+		{"x-gzip", true},
+		{"*", true},
+		{"*;q=0", false},
+		{"deflate, *", true},
+		{"*, gzip;q=0", false},
+		{"deflate", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.accept, func(t *testing.T) {
+			resp := do(t, h, tc.accept)
+			defer resp.Body.Close()
+
+			gzipped := resp.Header.Get("Content-Encoding") == "gzip"
+			assert.Equal(t, tc.want, gzipped)
+		})
+	}
+}
+
+func TestGzipMiddleware_AcceptEncodingAcrossHeaderLines(t *testing.T) {
+	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, http.NoBody)
+	require.NoError(t, err)
+	req.Header.Add("Accept-Encoding", "deflate")
+	req.Header.Add("Accept-Encoding", "gzip")
+
+	resp, err := rawClient().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+}
+
 func TestGzipMiddleware_WriteHeaderAfterWriteIgnored(t *testing.T) {
 	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
