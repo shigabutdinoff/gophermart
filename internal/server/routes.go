@@ -14,15 +14,21 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
 	balanceroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/balance"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route/healthcheck"
 	ordersroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/orders"
 )
 
 func (s *Server) setupRoutes() {
 	router := chi.NewRouter()
 	s.installMiddleware(router)
+	s.registerHealthcheck(router)
 	s.registerAPI(router)
 
 	s.router = router
+}
+
+func (s *Server) registerHealthcheck(router *chi.Mux) {
+	router.Get("/ping", healthcheck.Ping)
 }
 
 func (s *Server) installMiddleware(router *chi.Mux) {
