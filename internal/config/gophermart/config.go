@@ -6,7 +6,10 @@ import (
 )
 
 // Значения параметров запуска по умолчанию.
-const DefaultRunAddress = "localhost:8080"
+const (
+	DefaultRunAddress             = "localhost:8080"
+	DefaultRequestBodyLimit int64 = 1 << 20
+)
 
 // Значения очереди заданий по умолчанию.
 const (
@@ -23,11 +26,12 @@ const (
 
 // Config хранит параметры запуска приложения.
 type Config struct {
-	RunAddress     string `env:"RUN_ADDRESS"`
-	DatabaseURI    string `env:"DATABASE_URI"`
-	AccrualAddress string `env:"ACCRUAL_SYSTEM_ADDRESS"`
-	JWTSecret      string `env:"JWT_SECRET"`
-	Queue          QueueConfig
+	RunAddress       string `env:"RUN_ADDRESS"`
+	DatabaseURI      string `env:"DATABASE_URI"`
+	AccrualAddress   string `env:"ACCRUAL_SYSTEM_ADDRESS"`
+	RequestBodyLimit int64  `env:"REQUEST_BODY_LIMIT"`
+	JWTSecret        string `env:"JWT_SECRET"`
+	Queue            QueueConfig
 }
 
 // QueueConfig настраивает очередь заданий и повторы опроса расчёта.
@@ -43,7 +47,8 @@ type QueueConfig struct {
 // Default возвращает конфигурацию со значениями по умолчанию.
 func Default() Config {
 	return Config{
-		RunAddress: DefaultRunAddress,
+		RunAddress:       DefaultRunAddress,
+		RequestBodyLimit: DefaultRequestBodyLimit,
 		Queue: QueueConfig{
 			Name:                DefaultQueueName,
 			Workers:             DefaultQueueWorkers,
@@ -59,6 +64,9 @@ func Default() Config {
 func (c Config) validate() error {
 	if c.RunAddress == "" {
 		return fmt.Errorf("run address must not be empty")
+	}
+	if c.RequestBodyLimit <= 0 {
+		return fmt.Errorf("request body limit must be positive")
 	}
 	return nil
 }

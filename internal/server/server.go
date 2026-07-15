@@ -34,14 +34,15 @@ const (
 )
 
 type Server struct {
-	router          *chi.Mux
-	logger          *zap.Logger
-	runAddress      string
-	shutdownTimeout time.Duration
-	ln              net.Listener
-	srv             *http.Server
-	sqlDB           *sql.DB
-	deps            deps
+	router           *chi.Mux
+	logger           *zap.Logger
+	runAddress       string
+	requestBodyLimit int64
+	shutdownTimeout  time.Duration
+	ln               net.Listener
+	srv              *http.Server
+	sqlDB            *sql.DB
+	deps             deps
 }
 
 // deps собирает всё, что сервер отдаёт маршрутам и фоновым задачам.
@@ -91,11 +92,12 @@ func newServer(
 	}
 
 	server := &Server{
-		logger:          logger,
-		runAddress:      cfg.RunAddress,
-		shutdownTimeout: DefaultShutdownTimeout,
-		sqlDB:           sqlDB,
-		deps:            built,
+		logger:           logger,
+		runAddress:       cfg.RunAddress,
+		requestBodyLimit: cfg.RequestBodyLimit,
+		shutdownTimeout:  DefaultShutdownTimeout,
+		sqlDB:            sqlDB,
+		deps:             built,
 	}
 	server.setupRoutes()
 	return server, nil

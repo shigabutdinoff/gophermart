@@ -10,6 +10,7 @@ import (
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/bodylimit"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/decompress"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/logging"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
@@ -42,6 +43,7 @@ func (s *Server) installMiddleware(router *chi.Mux) {
 	router.Use(middleware.Compress(gzip.DefaultCompression))
 	router.Use(middleware.AllowContentEncoding(decompress.Encodings...))
 	router.Use(decompress.Gzip)
+	router.Use(bodylimit.Limit(s.requestBodyLimit))
 }
 
 func (s *Server) registerAPI(router *chi.Mux) {
