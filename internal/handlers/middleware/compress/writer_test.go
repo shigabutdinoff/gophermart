@@ -2,6 +2,7 @@ package compress
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,7 @@ func TestCompressWriter_ReleaseKeepsClientUntouched(t *testing.T) {
 	rec := httptest.NewRecorder()
 	cw := newCompressWriter(rec)
 	cw.Header().Set("Content-Type", "text/plain")
-	_, err := cw.Write([]byte("partial body"))
+	_, err := cw.Write([]byte(strings.Repeat("a", sniffLen)))
 	require.NoError(t, err)
 	require.True(t, cw.sink.on)
 
@@ -30,4 +31,18 @@ func TestCompressWriter_ReleaseKeepsClientUntouched(t *testing.T) {
 	// Повторный вызов безопасен
 	cw.release()
 	assert.Equal(t, written, rec.Body.Len())
+}
+
+func TestCompressWriter_PrecompressedPassthroughWithoutBuffering(t *testing.T) {
+	rec := httptest.NewRecorder()
+	cw := newCompressWriter(rec)
+	cw.Header().Set("Content-Encoding", "br")
+
+	n, err := cw.Write([]byte("small"))
+	require.NoError(t, err)
+	assert.Equal(t, 5, n)
+
+	assert.False(t, cw.sink.on)
+	assert.Equal(t, "small", rec.Body.String())
+	assert.Equal(t, "br", rec.Header().Get("Content-Encoding"))
 }

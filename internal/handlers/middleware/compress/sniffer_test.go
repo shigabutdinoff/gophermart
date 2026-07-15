@@ -8,6 +8,23 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestSniffer_AccumulatesAndTakes(t *testing.T) {
+	var s sniffer
+	assert.Equal(t, 0, s.buffered())
+
+	s.add([]byte("ab"))
+	s.add([]byte("cde"))
+	assert.Equal(t, 5, s.buffered())
+
+	assert.Equal(t, "abcde", string(s.take()))
+	assert.Equal(t, 0, s.buffered())
+}
+
+func TestSniffer_TakeEmpty(t *testing.T) {
+	var s sniffer
+	assert.Nil(t, s.take())
+}
+
 func TestEnsureContentType_KeepsExisting(t *testing.T) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")

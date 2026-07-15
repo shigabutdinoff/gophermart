@@ -267,7 +267,9 @@ func TestRouter_PanicRecovered(t *testing.T) {
 func TestRouter_PanicMidResponseAbortsConnection(t *testing.T) {
 	s := New(zap.NewNop(), config.Default())
 	s.router.Get("/broken", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("partial"))
+		w.Header().Set("Content-Type", "text/plain")
+		// Тело больше порога сжатия уходит клиенту сразу, до паники
+		_, _ = w.Write([]byte(strings.Repeat("partial ", 100)))
 		panic("boom")
 	})
 	srv := httptest.NewServer(s.router)
@@ -279,6 +281,27 @@ func TestRouter_PanicMidResponseAbortsConnection(t *testing.T) {
 		_, err = io.ReadAll(resp.Body)
 	}
 	assert.Error(t, err)
+}
+
+func TestRouter_PanicWhileSniffingAnswers500(t *testing.T) {
+	s := New(zap.NewNop(), config.Default())
+	s.router.Get("/broken", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("partial"))
+		panic("boom")
+	})
+	srv := httptest.NewServer(s.router)
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/broken", http.NoBody)
+	require.NoError(t, err)
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	resp, err := rawClient().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("Content-Encoding"))
 }
 
 func TestRouter_PanicAfterBufferedStatusAnswers500(t *testing.T) {
