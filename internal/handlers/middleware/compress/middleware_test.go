@@ -51,6 +51,94 @@ func do(t *testing.T, h http.Handler, accept string) *http.Response {
 	return resp
 }
 
+func TestGzipMiddleware_DecompressesRequest(t *testing.T) {
+	var got string
+	h := GzipMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		got = string(b)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/", gzipBody(t, "12345678903"))
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "12345678903", got)
+}
+
+func TestGzipMiddleware_DecompressesXGzipRequest(t *testing.T) {
+	var got string
+	h := GzipMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		got = string(b)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/", gzipBody(t, "12345678903"))
+	req.Header.Set("Content-Encoding", "x-gzip")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "12345678903", got)
+}
+
+func TestGzipMiddleware_CleansRequestMetadata(t *testing.T) {
+	var encoding string
+	var length int64
+	h := GzipMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		encoding = r.Header.Get("Content-Encoding")
+		length = r.ContentLength
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/", gzipBody(t, "12345678903"))
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	assert.Empty(t, encoding)
+	assert.Equal(t, int64(-1), length)
+}
+
+func TestGzipMiddleware_RejectsInvalidGzip(t *testing.T) {
+	called := false
+	h := GzipMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("definitely-not-gzip"))
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, http.StatusText(http.StatusBadRequest)+"\n", rec.Body.String())
+	assert.False(t, called)
+}
+
+func TestGzipMiddleware_PassthroughWithoutHeader(t *testing.T) {
+	var got string
+	h := GzipMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		got = string(b)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("plain-body"))
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "plain-body", got)
+}
+
 func TestGzipMiddleware_CompressesResponseForGzipClient(t *testing.T) {
 	h := GzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
