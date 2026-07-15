@@ -1,11 +1,13 @@
 package server
 
 import (
+	"compress/gzip"
 	"context"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,4 +316,34 @@ func TestRouter_LogsEveryRequest(t *testing.T) {
 		assert.Equal(t, tc.path, fields["uri"])
 		assert.EqualValues(t, tc.want, fields["status"])
 	}
+}
+
+func TestRouter_CompressesResponseForGzipClient(t *testing.T) {
+	s := New(zap.NewNop(), config.Default())
+	s.router.Get("/payload", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","padding":"` + strings.Repeat("0123456789", 60) + `"}`))
+	})
+	srv := httptest.NewServer(s.router)
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/payload", http.NoBody)
+	require.NoError(t, err)
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	resp, err := rawClient().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+	zr, err := gzip.NewReader(resp.Body)
+	require.NoError(t, err)
+	body, err := io.ReadAll(zr)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"status":"ok"`)
+}
+
+// rawClient даёт клиент без прозрачной декомпрессии и своего Accept-Encoding.
+func rawClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{DisableCompression: true}}
 }
