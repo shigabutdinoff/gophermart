@@ -1,8 +1,10 @@
 package server
 
 import (
+	"database/sql"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,6 +24,8 @@ type Server struct {
 	shutdownTimeout time.Duration
 	ln              net.Listener
 	srv             *http.Server
+	db              *sql.DB
+	dbMu            sync.RWMutex
 	config.Config
 }
 

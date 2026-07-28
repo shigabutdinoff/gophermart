@@ -8,6 +8,9 @@ import (
 
 // Run работает до отмены контекста, затем останавливается за shutdownTimeout.
 func (s *Server) Run(ctx context.Context) error {
+	s.initDatabase(ctx)
+	defer s.closeDatabase()
+
 	if s.ln == nil {
 		if err := s.listen(); err != nil {
 			return err
