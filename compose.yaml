@@ -1,0 +1,25 @@
+services:
+  pgsql:
+    image: 'postgres:18-alpine'
+    ports:
+      - '${FORWARD_DB_PORT:-5432}:5432'
+    environment:
+      PGPASSWORD: '${DB_PASSWORD:-secret}'
+      POSTGRES_DB: '${DB_DATABASE}'
+      POSTGRES_USER: '${DB_USERNAME}'
+      POSTGRES_PASSWORD: '${DB_PASSWORD:-secret}'
+    volumes:
+      - 'pgsql:/var/lib/postgresql'
+      - './docker/pgsql/create-testing-database.sql:/docker-entrypoint-initdb.d/10-create-testing-database.sql'
+    networks:
+      - pgsql
+    healthcheck:
+      test: [ CMD, pg_isready, '-q', '-d', '${DB_DATABASE}', '-U', '${DB_USERNAME}' ]
+      retries: 3
+      timeout: 5s
+networks:
+  pgsql:
+    driver: bridge
+volumes:
+  pgsql:
+    driver: local
