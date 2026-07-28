@@ -9,8 +9,15 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
 
-// initDatabase подключает БД и проверяет соединение.
+// initDatabase подключает БД и запускает миграции.
 func (s *Server) initDatabase(ctx context.Context) {
+	s.initDatabaseWith(ctx, database.Migrate)
+}
+
+func (s *Server) initDatabaseWith(
+	ctx context.Context,
+	migrate func(string, string) (bool, error),
+) {
 	db, err := database.Connection(s.DatabaseURI)
 	if err != nil {
 		s.logger.Warn("Не удалось открыть соединение с БД", zap.Error(err))
@@ -23,9 +30,27 @@ func (s *Server) initDatabase(ctx context.Context) {
 		return
 	}
 	s.swapDatabase(sqlDB)
+	s.checkDatabaseAndMigrate(ctx, sqlDB, migrate)
+}
 
-	if err := sqlDB.PingContext(ctx); err != nil {
-		s.logger.Warn("БД недоступна", zap.Error(err))
+func (s *Server) checkDatabaseAndMigrate(
+	ctx context.Context,
+	pinger interface{ PingContext(context.Context) error },
+	migrate func(string, string) (bool, error),
+) {
+	if err := pinger.PingContext(ctx); err != nil {
+		s.logger.Warn("БД недоступна, миграции пропущены", zap.Error(err))
+		return
+	}
+
+	applied, err := migrate(database.MigrationsURL, s.DatabaseURI)
+	switch {
+	case err != nil:
+		s.logger.Warn("Не удалось применить миграции", zap.Error(err))
+	case applied:
+		s.logger.Info("Миграции применены")
+	default:
+		s.logger.Info("Миграции: нет изменений")
 	}
 }
 
