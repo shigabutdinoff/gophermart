@@ -40,3 +40,13 @@ func TestConnection_LazyOpenWithoutDatabase(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, sqlDB)
 }
+
+func TestConnection_EnablesGORMErrorTranslation(t *testing.T) {
+	db, err := Connection(
+		"postgresql://postgres:postgres@localhost:1/praktikum?sslmode=disable",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	assert.True(t, db.Config.TranslateError)
+}

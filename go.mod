@@ -9,6 +9,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-chi/httplog/v3 v3.4.0
 	github.com/go-chi/jwtauth/v5 v5.4.0
+	github.com/go-chi/render v1.0.3
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/lestrrat-go/jwx/v3 v3.0.2
 	github.com/oklog/run v1.2.0
@@ -21,6 +22,7 @@ require (
 )
 
 require (
+	github.com/ajg/form v1.5.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
