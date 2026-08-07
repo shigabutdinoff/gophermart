@@ -9,73 +9,60 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
 
-// initDatabase подключает БД и запускает миграции.
+func openDatabase(logger *zap.Logger, dsn string) *sql.DB {
+	gormDB, err := database.Connection(dsn)
+	if err != nil {
+		logger.Warn("Не удалось открыть соединение с БД", zap.Error(err))
+		return nil
+	}
+
+	sqlDB, err := gormDB.DB()
+	if err != nil {
+		logger.Warn("Не удалось получить пул соединений БД", zap.Error(err))
+		return nil
+	}
+	return sqlDB
+}
+
 func (s *Server) initDatabase(ctx context.Context) {
 	s.initDatabaseWith(ctx, database.Migrate)
 }
 
 func (s *Server) initDatabaseWith(
 	ctx context.Context,
-	migrate func(string, string) (bool, error),
+	migrate func(context.Context, *sql.DB) error,
 ) {
-	db, err := database.Connection(s.DatabaseURI)
-	if err != nil {
-		s.logger.Warn("Не удалось открыть соединение с БД", zap.Error(err))
+	if s.sqlDB == nil {
 		return
 	}
 
-	sqlDB, err := db.DB()
-	if err != nil {
-		s.logger.Warn("Не удалось получить пул соединений БД", zap.Error(err))
-		return
-	}
-	s.swapDatabase(sqlDB)
-	s.checkDatabaseAndMigrate(ctx, sqlDB, migrate)
+	s.checkDatabaseAndMigrate(ctx, s.sqlDB, migrate)
 }
 
 func (s *Server) checkDatabaseAndMigrate(
 	ctx context.Context,
-	pinger interface{ PingContext(context.Context) error },
-	migrate func(string, string) (bool, error),
+	db *sql.DB,
+	migrate func(context.Context, *sql.DB) error,
 ) {
-	if err := pinger.PingContext(ctx); err != nil {
-		s.logger.Warn("БД недоступна, миграции пропущены", zap.Error(err))
+	if err := db.PingContext(ctx); err != nil {
+		s.logger.Error("БД недоступна, миграции пропущены", zap.Error(err))
 		return
 	}
 
-	applied, err := migrate(database.MigrationsURL, s.DatabaseURI)
-	switch {
-	case err != nil:
-		s.logger.Warn("Не удалось применить миграции", zap.Error(err))
-	case applied:
-		s.logger.Info("Миграции применены")
-	default:
-		s.logger.Info("Миграции: нет изменений")
+	if err := migrate(ctx, db); err != nil {
+		s.logger.Error("Не удалось применить миграции", zap.Error(err))
+		return
 	}
+
+	s.logger.Info("Миграции выполнены")
 }
 
 func (s *Server) closeDatabase() {
-	db := s.swapDatabase(nil)
-	if db == nil {
+	if s.sqlDB == nil {
 		return
 	}
 
-	if err := db.Close(); err != nil {
+	if err := s.sqlDB.Close(); err != nil {
 		s.logger.Warn("Не удалось закрыть соединение с БД", zap.Error(err))
 	}
-}
-
-func (s *Server) swapDatabase(db *sql.DB) *sql.DB {
-	s.dbMu.Lock()
-	previous := s.db
-	s.db = db
-	s.dbMu.Unlock()
-	return previous
-}
-
-func (s *Server) currentDatabase() *sql.DB {
-	s.dbMu.RLock()
-	db := s.db
-	s.dbMu.RUnlock()
-	return db
 }

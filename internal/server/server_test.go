@@ -33,22 +33,23 @@ func waitDone(t *testing.T, done <-chan error) error {
 	case err := <-done:
 		return err
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run не завершился вовремя")
+		require.FailNow(t, "Run не завершился вовремя")
 		return nil
 	}
 }
 
 func TestNew(t *testing.T) {
-	s := New(zap.NewNop(), config.Default())
+	s := mustNew(t, zap.NewNop(), config.Default())
 
 	assert.Equal(t, config.DefaultRunAddress, s.RunAddress)
 	assert.Equal(t, DefaultShutdownTimeout, s.shutdownTimeout)
+	assert.Equal(t, config.DefaultRequestBodyLimit, s.RequestBodyLimit)
 	assert.NotNil(t, s.router)
 }
 
 func TestServer_ServesAndLogsStart(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
-	s := New(zap.New(core), config.Default())
+	s := mustNew(t, zap.New(core), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 
 	r := chi.NewRouter()
@@ -81,14 +82,14 @@ func TestServer_GracefulShutdownWaitsForActiveRequest(t *testing.T) {
 	r.Get("/hold", func(w http.ResponseWriter, _ *http.Request) {
 		close(started)
 		<-release
-		_, _ = w.Write([]byte("done"))
+		_, _ = io.WriteString(w, "done")
 	})
 	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
 	core, logs := observer.New(zap.InfoLevel)
-	s := New(zap.New(core), config.Default())
+	s := mustNew(t, zap.New(core), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 	s.router = r
 
@@ -147,7 +148,7 @@ func TestServer_ForcesShutdownAfterTimeout(t *testing.T) {
 	})
 
 	core, logs := observer.New(zap.InfoLevel)
-	s := New(zap.New(core), config.Default())
+	s := mustNew(t, zap.New(core), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 	s.shutdownTimeout = 100 * time.Millisecond
 	s.router = r
@@ -173,7 +174,7 @@ func TestServer_ForcesShutdownAfterTimeout(t *testing.T) {
 
 func TestServer_ServeErrorReturnedNotLogged(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
-	s := New(zap.New(core), config.Default())
+	s := mustNew(t, zap.New(core), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 	s.router = chi.NewRouter()
 
@@ -199,7 +200,7 @@ func TestServer_ServeFailureClosesActiveConnections(t *testing.T) {
 		<-release
 	})
 
-	s := New(zap.NewNop(), config.Default())
+	s := mustNew(t, zap.NewNop(), config.Default())
 	s.RunAddress = "127.0.0.1:0"
 	s.router = r
 
@@ -224,8 +225,54 @@ func TestServer_ServeFailureClosesActiveConnections(t *testing.T) {
 	case err := <-resCh:
 		assert.Error(t, err)
 	case <-time.After(2 * time.Second):
-		t.Fatal("активное соединение пережило возврат Run")
+		require.FailNow(t, "активное соединение пережило возврат Run")
 	}
+}
+
+func TestServer_ServeErrorSurvivesShutdownPath(t *testing.T) {
+	s := mustNew(t, zap.NewNop(), config.Default())
+	s.RunAddress = "127.0.0.1:0"
+	s.router = chi.NewRouter()
+
+	done := startServer(t, context.Background(), s)
+
+	require.Eventually(t, func() bool {
+		return s.ln.Close() == nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	err := waitDone(t, done)
+
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, http.ErrServerClosed)
+	assert.NotContains(t, err.Error(), "server shutdown")
+}
+
+func TestServer_RunReturnsWhenServeStopsOnItsOwn(t *testing.T) {
+	closed := make(chan struct{})
+	r := chi.NewRouter()
+	r.Get("/stop", func(_ http.ResponseWriter, req *http.Request) {
+		// сервер берётся из контекста запроса, иначе чтение поля гонится с Run
+		srv := req.Context().Value(http.ServerContextKey).(*http.Server)
+		go func() {
+			_ = srv.Close()
+			close(closed)
+		}()
+	})
+
+	s := mustNew(t, zap.NewNop(), config.Default())
+	s.RunAddress = "127.0.0.1:0"
+	s.router = r
+
+	done := startServer(t, context.Background(), s)
+
+	// обслуживание завершается само и без ошибки, контекст запуска не отменён
+	resp, err := http.Get("http://" + s.Addr() + "/stop")
+	if err == nil {
+		resp.Body.Close()
+	}
+	<-closed
+
+	assert.NoError(t, waitDone(t, done))
 }
 
 func TestServer_Run_AddressBusy(t *testing.T) {
@@ -233,13 +280,13 @@ func TestServer_Run_AddressBusy(t *testing.T) {
 	require.NoError(t, err)
 	defer ln.Close()
 
-	s := New(zap.NewNop(), config.Default())
+	s := mustNew(t, zap.NewNop(), config.Default())
 	s.RunAddress = ln.Addr().String()
 	require.Error(t, s.Run(context.Background()))
 }
 
 func TestServer_Run_InvalidAddress(t *testing.T) {
-	s := New(zap.NewNop(), config.Default())
+	s := mustNew(t, zap.NewNop(), config.Default())
 	s.RunAddress = "bad::addr"
 	require.Error(t, s.Run(context.Background()))
 }

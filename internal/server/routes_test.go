@@ -16,7 +16,7 @@ import (
 func newTestServer(t *testing.T, logger *zap.Logger, cfg config.Config) (*Server, *httptest.Server) {
 	t.Helper()
 
-	s := New(logger, cfg)
+	s := mustNew(t, logger, cfg)
 	srv := httptest.NewServer(s.router)
 	t.Cleanup(srv.Close)
 	return s, srv

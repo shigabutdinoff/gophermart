@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"net"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -13,29 +12,29 @@ import (
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 )
 
-const (
-	DefaultShutdownTimeout   = 10 * time.Second
-)
+const DefaultShutdownTimeout = 10 * time.Second
 
-// Server запускает HTTP-сервер и останавливает его (graceful shutdown).
 type Server struct {
 	router          *chi.Mux
 	logger          *zap.Logger
 	shutdownTimeout time.Duration
 	ln              net.Listener
 	srv             *http.Server
-	db              *sql.DB
-	dbMu            sync.RWMutex
+	sqlDB           *sql.DB
 	config.Config
 }
 
-// New создаёт сервер с переданной конфигурацией.
-func New(logger *zap.Logger, cfg config.Config) *Server {
-	s := &Server{
+func New(logger *zap.Logger, cfg config.Config) (*Server, error) {
+	return newServer(logger, cfg, openDatabase(logger, cfg.DatabaseURI))
+}
+
+func newServer(logger *zap.Logger, cfg config.Config, sqlDB *sql.DB) (*Server, error) {
+	server := &Server{
 		logger:          logger,
 		shutdownTimeout: DefaultShutdownTimeout,
+		sqlDB:           sqlDB,
 		Config:          cfg,
 	}
-	s.setupRoutes()
-	return s
+	server.setupRoutes()
+	return server, nil
 }

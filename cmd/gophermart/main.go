@@ -15,10 +15,7 @@ import (
 )
 
 func main() {
-	logger, err := zap.NewProduction()
-	if err != nil {
-		panic(err)
-	}
+	logger := zap.Must(zap.NewProduction())
 	defer func() { _ = logger.Sync() }()
 
 	cfg, err := config.Parse(os.Args[1:])
@@ -29,7 +26,10 @@ func main() {
 	if err != nil {
 		logger.Fatal("Не удалось загрузить конфигурацию", zap.Error(err))
 	}
-	s := server.New(logger, cfg)
+	serverInstance, err := server.New(logger, cfg)
+	if err != nil {
+		logger.Fatal("Не удалось создать сервер", zap.Error(err))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -40,7 +40,7 @@ func main() {
 		stop()
 	}()
 
-	if err := s.Run(ctx); err != nil {
+	if err := serverInstance.Run(ctx); err != nil {
 		logger.Fatal("Сервер завершился с ошибкой", zap.Error(err))
 	}
 }

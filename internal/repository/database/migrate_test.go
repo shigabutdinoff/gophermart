@@ -1,101 +1,32 @@
 package database
 
 import (
-	"errors"
-	"os"
-	"path/filepath"
+	"context"
 	"testing"
 
-	"github.com/golang-migrate/migrate/v4"
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	schema "github.com/shigabutdinoff/gophermart/migrations"
 )
 
-const unreachableDSN = "postgresql://postgres:postgres@localhost:1/praktikum?sslmode=disable"
-
-type stubMigrator struct {
-	calls int
-	err   error
-}
-
-func (s *stubMigrator) Up() error {
-	s.calls++
-	return s.err
-}
-
-func TestMigrate_MissingSourceDir(t *testing.T) {
-	missing := "file://" + filepath.Join(t.TempDir(), "nope")
-
-	applied, err := Migrate(missing, unreachableDSN)
-
-	require.Error(t, err)
-	assert.False(t, applied)
-}
-
-func TestMigrate_DatabaseUnavailable(t *testing.T) {
-	empty := "file://" + t.TempDir()
-
-	applied, err := Migrate(empty, unreachableDSN)
-
-	require.Error(t, err)
-	assert.False(t, applied)
-}
-
-func TestMigrateUp_EmptySourceIsNoOp(t *testing.T) {
-	m := stubMigrator{err: &os.PathError{
-		Op:  "first",
-		Err: os.ErrNotExist,
-	}}
-
-	applied, err := migrateUp(&m)
-
+// Двойник без ожиданий отвергает любой запрос, так же ведёт себя мёртвая БД.
+func TestMigrate_UnreachableDatabaseReturnsError(t *testing.T) {
+	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	assert.False(t, applied)
-	assert.Equal(t, 1, m.calls)
-}
+	mock.ExpectClose()
+	t.Cleanup(func() { _ = db.Close() })
 
-func TestMigrateUp_MissingCurrentVersionIsError(t *testing.T) {
-	m := stubMigrator{err: &os.PathError{
-		Op:  "next",
-		Err: os.ErrNotExist,
-	}}
-
-	applied, err := migrateUp(&m)
+	err = Migrate(context.Background(), db)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, os.ErrNotExist)
-	assert.False(t, applied)
-	assert.Equal(t, 1, m.calls)
 }
 
-func TestMigrateUp_NoChanges(t *testing.T) {
-	m := stubMigrator{err: migrate.ErrNoChange}
-
-	applied, err := migrateUp(&m)
-
+// Состав встроенной ФС проверяет пакет migrations, здесь важен сам каталог.
+func TestMigrate_UsesEmbeddedMigrations(t *testing.T) {
+	entries, err := schema.FS.ReadDir(migrationsDir)
 	require.NoError(t, err)
-	assert.False(t, applied)
-	assert.Equal(t, 1, m.calls)
-}
 
-func TestMigrateUp_AppliesMigrations(t *testing.T) {
-	m := stubMigrator{}
-
-	applied, err := migrateUp(&m)
-
-	require.NoError(t, err)
-	assert.True(t, applied)
-	assert.Equal(t, 1, m.calls)
-}
-
-func TestMigrateUp_ReturnsMigrationError(t *testing.T) {
-	migrationErr := errors.New("migration failed")
-	m := stubMigrator{err: migrationErr}
-
-	applied, err := migrateUp(&m)
-
-	require.Error(t, err)
-	assert.Same(t, migrationErr, err)
-	assert.False(t, applied)
-	assert.Equal(t, 1, m.calls)
+	assert.NotEmpty(t, entries)
 }

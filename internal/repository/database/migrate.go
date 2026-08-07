@@ -1,46 +1,29 @@
 package database
 
 import (
-	"errors"
-	"os"
+	"context"
+	"database/sql"
+	"fmt"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/pressly/goose/v3"
+
+	schema "github.com/shigabutdinoff/gophermart/migrations"
 )
 
-// MigrationsURL задаёт путь к каталогу миграций.
-const MigrationsURL = "file://migrations"
+// migrationsDir указывает корень встроенной файловой системы миграций
+const migrationsDir = "."
 
-// Migrate применяет миграции схемы и сообщает об изменениях.
-func Migrate(sourceURL, dsn string) (bool, error) {
-	m, err := migrate.New(sourceURL, dsn)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _, _ = m.Close() }()
-
-	return migrateUp(m)
-}
-
-type migrator interface {
-	Up() error
-}
-
-func migrateUp(m migrator) (bool, error) {
-	if err := m.Up(); err != nil {
-		if errors.Is(err, migrate.ErrNoChange) || isEmptySource(err) {
-			return false, nil
-		}
-		return false, err
+// Migrate приводит схему к актуальной версии.
+func Migrate(ctx context.Context, db *sql.DB) error {
+	goose.SetBaseFS(schema.FS)
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("postgres"); err != nil {
+		return fmt.Errorf("set migrations dialect: %w", err)
 	}
 
-	return true, nil
-}
+	if err := goose.UpContext(ctx, db, migrationsDir); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
 
-func isEmptySource(err error) bool {
-	var pathErr *os.PathError
-	return errors.As(err, &pathErr) &&
-		pathErr.Op == "first" &&
-		errors.Is(pathErr.Err, os.ErrNotExist)
+	return nil
 }

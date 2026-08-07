@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
+	"net/http"
 
+	"github.com/oklog/run"
 	"go.uber.org/zap"
 )
 
@@ -24,18 +27,31 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	s.srv = srv
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- s.srv.Serve(s.ln)
-	}()
+	// пишется и читается в горутине, вызвавшей Run, гонки здесь нет
+	var shutdownErr error
+
+	var group run.Group
+	group.Add(func() error {
+		if err := s.srv.Serve(s.ln); !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}, func(error) {
+		if ctx.Err() != nil {
+			shutdownErr = s.shutdown()
+			return
+		}
+		// обслуживание прервалось само, соединения закрываются принудительно
+		_ = s.srv.Close()
+	})
+	group.Add(run.ContextHandler(ctx))
 	s.logger.Info("Сервер запущен", zap.String("address", s.Addr()))
 
-	select {
-	case err := <-errCh:
-		_ = s.srv.Close()
-		return err
-	case <-ctx.Done():
+	err = group.Run()
+	if errors.Is(err, context.Canceled) {
+		// отмена контекста означает штатную остановку, а не ошибку запуска
+		err = nil
 	}
 
-	return s.shutdown(errCh)
+	return errors.Join(err, shutdownErr)
 }

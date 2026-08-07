@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -18,14 +19,14 @@ import (
 
 const unavailableDatabaseDSN = "postgresql://postgres:postgres@localhost:1/praktikum?sslmode=disable"
 
-type stubDatabasePinger struct {
-	calls int
-	err   error
-}
+func newPingMock(t *testing.T, pingErr error) (*sql.DB, sqlmock.Sqlmock) {
+	t.Helper()
 
-func (p *stubDatabasePinger) PingContext(context.Context) error {
-	p.calls++
-	return p.err
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectPing().WillReturnError(pingErr)
+	return db, mock
 }
 
 func newObservedServer(t *testing.T, dsn string) (*Server, *observer.ObservedLogs) {
@@ -33,36 +34,31 @@ func newObservedServer(t *testing.T, dsn string) (*Server, *observer.ObservedLog
 	core, logs := observer.New(zap.InfoLevel)
 	cfg := config.Default()
 	cfg.DatabaseURI = dsn
-	return New(zap.New(core), cfg), logs
+	return mustNew(t, zap.New(core), cfg), logs
 }
 
 func newServerWithDatabase(t *testing.T) (*Server, *sql.DB) {
 	t.Helper()
 
-	db, err := database.Connection(unavailableDatabaseDSN)
+	gormDB, err := database.Connection(unavailableDatabaseDSN)
 	require.NoError(t, err)
-	sqlDB, err := db.DB()
+	sqlDB, err := gormDB.DB()
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = sqlDB.Close()
-	})
 
-	s := New(zap.NewNop(), config.Default())
-	s.swapDatabase(sqlDB)
-	return s, sqlDB
+	server, err := newServer(zap.NewNop(), config.Default(), sqlDB)
+	require.NoError(t, err)
+	return server, sqlDB
 }
 
-func TestInitDatabase_EmptyDSN(t *testing.T) {
+func TestOpenDatabase_EmptyDSN(t *testing.T) {
 	s, logs := newObservedServer(t, "")
-	s.initDatabase(context.Background())
-	assert.Nil(t, s.currentDatabase())
+	assert.Nil(t, s.sqlDB)
 	require.Equal(t, 1, logs.FilterMessage("Не удалось открыть соединение с БД").Len())
 }
 
-func TestInitDatabase_MalformedDSNDoesNotLeakCredentials(t *testing.T) {
+func TestOpenDatabase_MalformedDSNDoesNotLeakCredentials(t *testing.T) {
 	s, logs := newObservedServer(t, "postgresql://user:SECRETPW@bad host:5432/praktikum")
-	s.initDatabase(context.Background())
-	assert.Nil(t, s.currentDatabase())
+	assert.Nil(t, s.sqlDB)
 	entries := logs.FilterMessage("Не удалось открыть соединение с БД").All()
 	require.Len(t, entries, 1)
 	assert.Equal(t, "некорректная строка подключения к БД", entries[0].ContextMap()["error"])
@@ -72,96 +68,54 @@ func TestInitDatabase_UnavailableDatabaseKeepsHandleAndSkipsMigration(t *testing
 	s, logs := newObservedServer(t, unavailableDatabaseDSN)
 	migrationCalls := 0
 
-	s.initDatabaseWith(context.Background(), func(string, string) (bool, error) {
+	s.initDatabaseWith(context.Background(), func(context.Context, *sql.DB) error {
 		migrationCalls++
-		return false, nil
+		return nil
 	})
 
-	require.NotNil(t, s.currentDatabase())
+	require.NotNil(t, s.sqlDB)
 	t.Cleanup(s.closeDatabase)
 	assert.Zero(t, migrationCalls)
-
-	entries := logs.All()
-	require.Len(t, entries, 1)
-	assert.Equal(t, "БД недоступна, миграции пропущены", entries[0].Message)
-	assert.Equal(t, zap.WarnLevel, entries[0].Level)
-	assert.NotEmpty(t, entries[0].ContextMap()["error"])
-	assert.Zero(t, logs.FilterMessage("БД недоступна").Len())
-	assert.Zero(t, logs.FilterMessage("Не удалось применить миграции").Len())
-	assert.Zero(t, logs.FilterMessage("Миграции применены").Len())
-	assert.Zero(t, logs.FilterMessage("Миграции: нет изменений").Len())
+	skipped := logs.FilterMessage("БД недоступна, миграции пропущены").All()
+	require.Len(t, skipped, 1)
+	assert.Equal(t, zap.ErrorLevel, skipped[0].Level)
 }
 
 func TestCheckDatabaseAndMigrate_SuccessfulPingHandlesMigrationResult(t *testing.T) {
 	migrationErr := errors.New("migration failed")
 	tests := []struct {
 		name            string
-		applied         bool
 		migrationErr    error
 		expectedMessage string
 		expectedLevel   zapcore.Level
 	}{
-		{
-			name:            "migration error",
-			migrationErr:    migrationErr,
-			expectedMessage: "Не удалось применить миграции",
-			expectedLevel:   zap.WarnLevel,
-		},
-		{
-			name:            "migrations applied",
-			applied:         true,
-			expectedMessage: "Миграции применены",
-			expectedLevel:   zap.InfoLevel,
-		},
-		{
-			name:            "no migration changes",
-			expectedMessage: "Миграции: нет изменений",
-			expectedLevel:   zap.InfoLevel,
-		},
+		{"migration error", migrationErr, "Не удалось применить миграции", zap.ErrorLevel},
+		{"migrations applied", nil, "Миграции выполнены", zap.InfoLevel},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			const dsn = "postgresql://user:password@db:5432/gophermart"
-			s, logs := newObservedServer(t, dsn)
-			pinger := &stubDatabasePinger{}
+			s, logs := newObservedServer(t, "postgresql://user:password@db:5432/gophermart")
+			handle, mock := newPingMock(t, nil)
 			migrationCalls := 0
-			var gotSourceURL string
-			var gotDSN string
+			var gotDB *sql.DB
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 
-			s.checkDatabaseAndMigrate(
-				context.Background(),
-				pinger,
-				func(sourceURL, migrationDSN string) (bool, error) {
-					migrationCalls++
-					gotSourceURL = sourceURL
-					gotDSN = migrationDSN
-					return tt.applied, tt.migrationErr
-				},
-			)
+			s.checkDatabaseAndMigrate(ctx, handle, func(migrateCtx context.Context, db *sql.DB) error {
+				migrationCalls++
+				gotDB = db
+				require.NoError(t, migrateCtx.Err())
+				return tt.migrationErr
+			})
 
-			assert.Equal(t, 1, pinger.calls)
+			require.NoError(t, mock.ExpectationsWereMet())
 			assert.Equal(t, 1, migrationCalls)
-			assert.Equal(t, database.MigrationsURL, gotSourceURL)
-			assert.Equal(t, dsn, gotDSN)
-
+			assert.Same(t, handle, gotDB)
 			entries := logs.All()
 			require.Len(t, entries, 1)
 			assert.Equal(t, tt.expectedMessage, entries[0].Message)
 			assert.Equal(t, tt.expectedLevel, entries[0].Level)
-			if tt.migrationErr != nil {
-				assert.Equal(t, tt.migrationErr.Error(), entries[0].ContextMap()["error"])
-			}
-			assert.Zero(t, logs.FilterMessage("БД недоступна, миграции пропущены").Len())
-			for _, message := range []string{
-				"Не удалось применить миграции",
-				"Миграции применены",
-				"Миграции: нет изменений",
-			} {
-				if message != tt.expectedMessage {
-					assert.Zero(t, logs.FilterMessage(message).Len())
-				}
-			}
 		})
 	}
 }
@@ -171,35 +125,5 @@ func TestServer_Run_ClosesDatabaseOnListenError(t *testing.T) {
 	s.RunAddress = "bad::addr"
 
 	require.Error(t, s.Run(context.Background()))
-	assert.Nil(t, s.currentDatabase())
-	assert.EqualError(t, oldDB.PingContext(context.Background()), "sql: database is closed")
-}
-
-func TestServer_DatabaseAccessConcurrentClose(t *testing.T) {
-	s, oldDB := newServerWithDatabase(t)
-
-	ready := make(chan struct{})
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = s.currentDatabase()
-		close(ready)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-				_ = s.currentDatabase()
-			}
-		}
-	}()
-
-	<-ready
-	s.closeDatabase()
-	close(stop)
-	<-done
-
-	assert.Nil(t, s.currentDatabase())
 	assert.EqualError(t, oldDB.PingContext(context.Background()), "sql: database is closed")
 }
