@@ -27,7 +27,7 @@ func TestRouter_AuthRouteScopeAndPublicAccess(t *testing.T) {
 		{http.MethodPost, "/api/user/login", validBody, http.StatusInternalServerError},
 		{http.MethodPost, "/api/user/orders", "", http.StatusUnauthorized},
 		{http.MethodGet, "/api/user/orders", "", http.StatusUnauthorized},
-		{http.MethodHead, "/api/user/orders", "", http.StatusMethodNotAllowed},
+		{http.MethodHead, "/api/user/orders", "", http.StatusUnauthorized},
 		{http.MethodGet, "/api/user/balance", "", http.StatusUnauthorized},
 		{http.MethodPost, "/api/user/balance/withdraw", "", http.StatusUnauthorized},
 		{http.MethodGet, "/api/user/withdrawals", "", http.StatusUnauthorized},

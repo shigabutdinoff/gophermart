@@ -33,6 +33,8 @@ func (s *Server) registerHealthcheck(router *chi.Mux) {
 
 func (s *Server) installMiddleware(router *chi.Mux) {
 	router.Use(logging.WithLogging(s.logger))
+	router.Use(middleware.GetHead)
+	router.Use(middleware.Heartbeat("/live"))
 	router.Use(middleware.Compress(gzip.DefaultCompression))
 	router.Use(middleware.AllowContentEncoding(decompress.Encodings...))
 	router.Use(decompress.Gzip)
