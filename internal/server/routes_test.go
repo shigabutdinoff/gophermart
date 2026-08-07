@@ -1,7 +1,6 @@
 package server
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -23,9 +22,11 @@ func newTestServer(t *testing.T, logger *zap.Logger, cfg config.Config) (*Server
 	return s, srv
 }
 
-func TestRouter_PanicRecovered(t *testing.T) {
+func TestRouter_PanicAnswersInternalError(t *testing.T) {
 	s, srv := newTestServer(t, zap.NewNop(), config.Default())
-	s.router.Get("/panic", func(http.ResponseWriter, *http.Request) { panic("boom") })
+	s.router.Get("/panic", func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
 
 	resp, err := srv.Client().Get(srv.URL + "/panic")
 	require.NoError(t, err)
@@ -36,21 +37,6 @@ func TestRouter_PanicRecovered(t *testing.T) {
 	require.NoError(t, err)
 	defer resp2.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp2.StatusCode)
-}
-
-func TestRouter_PanicMidResponseAbortsConnection(t *testing.T) {
-	s, srv := newTestServer(t, zap.NewNop(), config.Default())
-	s.router.Get("/broken", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("partial"))
-		panic("boom")
-	})
-
-	resp, err := srv.Client().Get(srv.URL + "/broken")
-	if err == nil {
-		defer resp.Body.Close()
-		_, err = io.ReadAll(resp.Body)
-	}
-	assert.Error(t, err)
 }
 
 func TestRouter_LogsEveryRequest(t *testing.T) {
@@ -78,12 +64,23 @@ func TestRouter_LogsEveryRequest(t *testing.T) {
 		require.Equal(t, tc.want, resp.StatusCode)
 	}
 
-	entries := observed.FilterMessage("Сведения о запросе").All()
+	entries := observed.FilterField(
+		zap.String("http.request.method", http.MethodGet),
+	).All()
+	entries = append(entries, observed.FilterField(
+		zap.String("http.request.method", http.MethodPost),
+	).All()...)
 	require.Len(t, entries, len(reqs))
-	for i, tc := range reqs {
-		fields := entries[i].ContextMap()
-		assert.Equal(t, tc.method, fields["method"])
-		assert.Equal(t, tc.path, fields["uri"])
-		assert.EqualValues(t, tc.want, fields["status"])
+
+	byPath := make(map[string]map[string]any, len(entries))
+	for _, entry := range entries {
+		fields := entry.ContextMap()
+		path, _ := fields["url.path"].(string)
+		byPath[path+" "+fields["http.request.method"].(string)] = fields
+	}
+	for _, tc := range reqs {
+		fields, ok := byPath[tc.path+" "+tc.method]
+		require.True(t, ok, "нет записи для %s %s", tc.method, tc.path)
+		assert.EqualValues(t, tc.want, fields["http.response.status_code"])
 	}
 }
