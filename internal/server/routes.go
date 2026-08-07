@@ -1,12 +1,15 @@
 package server
 
 import (
+	"compress/gzip"
+
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
-	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/compress"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/decompress"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/logging"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
@@ -24,7 +27,9 @@ func (s *Server) setupRoutes() {
 
 func (s *Server) installMiddleware(router *chi.Mux) {
 	router.Use(logging.WithLogging(s.logger))
-	router.Use(compress.GzipMiddleware)
+	router.Use(middleware.Compress(gzip.DefaultCompression))
+	router.Use(middleware.AllowContentEncoding(decompress.Encodings...))
+	router.Use(decompress.Gzip)
 }
 
 func (s *Server) registerAPI(router *chi.Mux) {
