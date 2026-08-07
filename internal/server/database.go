@@ -18,6 +18,14 @@ const (
 	databaseConnMaxIdleTime = time.Minute
 )
 
+// Бюджет подключения к БД при старте с паузами между попытками
+const (
+	databaseConnectAttempts = 3
+	databaseConnectBudget   = 5 * time.Second
+	// попытка короче секунды, иначе третья не успевает начаться в бюджете
+	databasePingTimeout = 700 * time.Millisecond
+)
+
 func (s *Server) pinger() healthcheck.Pinger {
 	if s.sqlDB == nil {
 		return unavailableDB{}
@@ -58,7 +66,7 @@ func (s *Server) initDatabase(
 		return database.ErrUnavailable
 	}
 
-	if err := s.sqlDB.PingContext(ctx); err != nil {
+	if err := s.pingWithRetry(ctx); err != nil {
 		s.logger.Error("БД недоступна, миграции пропущены", zap.Error(err))
 		return err
 	}
@@ -105,6 +113,33 @@ func (s *Server) databaseRecoveryActor(ctx context.Context, ready chan<- struct{
 		<-recoveryCtx.Done()
 		return nil
 	}, func(error) { interruptOnce.Do(cancelRecovery) }
+}
+
+// pingWithRetry повторяет проверку связи с БД в пределах общего бюджета.
+func (s *Server) pingWithRetry(ctx context.Context) error {
+	budgetCtx, cancel := context.WithTimeout(ctx, databaseConnectBudget)
+	defer cancel()
+
+	return retry.Do(
+		func() error {
+			attemptCtx, cancelAttempt := context.WithTimeout(budgetCtx, databasePingTimeout)
+			defer cancelAttempt()
+
+			return s.sqlDB.PingContext(attemptCtx)
+		},
+		retry.Context(budgetCtx),
+		retry.Attempts(databaseConnectAttempts),
+		retry.Delay(s.retryDelay),
+		retry.DelayType(retry.FixedDelay),
+		retry.LastErrorOnly(true),
+		retry.OnRetry(func(attempt uint, err error) {
+			s.logger.Warn(
+				"Повторная попытка подключения к БД",
+				zap.Uint("attempt", attempt+1),
+				zap.Error(err),
+			)
+		}),
+	)
 }
 
 func (s *Server) closeDatabase() {

@@ -15,9 +15,6 @@ import (
 	servermocks "github.com/shigabutdinoff/gophermart/internal/server/mocks"
 )
 
-// Одна попытка принадлежит recovery-циклу; внутренний ping-retry — отдельная feature.
-const databaseRecoveryInitialPingAttempts = 1
-
 type scriptedPingConnector struct {
 	ping  func(int32) error
 	calls atomic.Int32

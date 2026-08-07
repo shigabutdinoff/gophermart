@@ -118,6 +118,47 @@ func TestInitDatabase_SuccessfulPingHandlesMigrationResult(t *testing.T) {
 	}
 }
 
+func TestInitDatabase_RetriesUntilDatabaseAppears(t *testing.T) {
+	s, logs := newObservedServer(t, "postgresql://user:password@db:5432/gophermart")
+	s.retryDelay = time.Millisecond
+	refused := errors.New("connection refused")
+	handle, mock := newPingMock(t, refused, nil)
+	s.sqlDB = handle
+	migrationCalls := 0
+
+	s.initDatabase(context.Background(), func(context.Context, *sql.DB) error {
+		migrationCalls++
+		return nil
+	})
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	assert.Equal(t, 1, migrationCalls)
+	assert.Equal(t, 1, logs.FilterMessage("Повторная попытка подключения к БД").Len())
+	assert.Equal(t, 1, logs.FilterMessage("Миграции выполнены").Len())
+}
+
+func TestInitDatabase_GivesUpAfterConfiguredAttempts(t *testing.T) {
+	s, logs := newObservedServer(t, "postgresql://user:SECRETPW@db:5432/gophermart")
+	s.retryDelay = time.Millisecond
+	refused := errors.New("connection refused")
+	handle, mock := newPingMock(t, refused, refused, refused)
+	s.sqlDB = handle
+	migrationCalls := 0
+
+	s.initDatabase(context.Background(), func(context.Context, *sql.DB) error {
+		migrationCalls++
+		return nil
+	})
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	assert.Zero(t, migrationCalls)
+	assert.Equal(t, 1, logs.FilterMessage("БД недоступна, миграции пропущены").Len())
+	assert.Equal(t, databaseConnectAttempts, logs.FilterMessage("Повторная попытка подключения к БД").Len())
+	for _, entry := range logs.All() {
+		assert.NotContains(t, entry.ContextMap()["error"], "SECRETPW")
+	}
+}
+
 func TestOpenDatabase_AppliesPoolLimits(t *testing.T) {
 	s, _ := newObservedServer(t, unavailableDatabaseDSN)
 	require.NotNil(t, s.sqlDB)

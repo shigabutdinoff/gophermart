@@ -34,7 +34,7 @@ func TestServerRun_RecoversDatabasePreparationInDispatchOnlyMode(t *testing.T) {
 	go func() { done <- s.Run(ctx) }()
 
 	require.Eventually(t, func() bool {
-		return connector.calls.Load() > databaseRecoveryInitialPingAttempts
+		return connector.calls.Load() > databaseConnectAttempts
 	}, time.Second, time.Millisecond)
 	assert.Nil(t, s.deps.runner)
 	require.Eventually(t, func() bool {
@@ -49,7 +49,7 @@ func TestServerRun_StartsQueueOnlyAfterRecoveredMigrationsFinish(t *testing.T) {
 	events := &databaseEventLog{}
 	db, _ := newScriptedPingDatabase(t, func(call int32) error {
 		events.add("ping")
-		if call <= databaseRecoveryInitialPingAttempts {
+		if call <= databaseConnectAttempts {
 			return database.ErrUnavailable
 		}
 
@@ -97,7 +97,7 @@ func TestServerRun_StartsQueueOnlyAfterRecoveredMigrationsFinish(t *testing.T) {
 	receiveWithin(t, lifecycle.startCalled)
 	receiveWithin(t, lifecycle.stoppedCalled)
 	wantPrefix := []string{
-		"ping", "ping",
+		"ping", "ping", "ping", "ping",
 		"migrations_started", "migrations_finished", "resume", "start",
 	}
 	got := events.snapshot()

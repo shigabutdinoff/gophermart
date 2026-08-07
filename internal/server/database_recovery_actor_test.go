@@ -24,7 +24,7 @@ func TestDatabaseRecoveryActor_RetriesFullPreparationUntilReadyAndWaitsForInterr
 		events := &databaseEventLog{}
 		db, connector := newScriptedPingDatabase(t, func(call int32) error {
 			events.add("ping")
-			if call <= databaseRecoveryInitialPingAttempts {
+			if call <= databaseConnectAttempts {
 				return pingErr
 			}
 			return nil
@@ -53,12 +53,14 @@ func TestDatabaseRecoveryActor_RetriesFullPreparationUntilReadyAndWaitsForInterr
 		done := make(chan error, 1)
 		go func() { done <- actor() }()
 
+		// внутренний retry успевает исчерпать бюджет попыток подключения
+		time.Sleep(2 * time.Millisecond)
 		synctest.Wait()
 		events.add("wait")
-		assert.Equal(t, int32(databaseRecoveryInitialPingAttempts), connector.calls.Load())
+		assert.Equal(t, int32(databaseConnectAttempts), connector.calls.Load())
 		time.Sleep(time.Millisecond - time.Nanosecond)
 		synctest.Wait()
-		assert.Equal(t, int32(databaseRecoveryInitialPingAttempts), connector.calls.Load())
+		assert.Equal(t, int32(databaseConnectAttempts), connector.calls.Load())
 		time.Sleep(time.Nanosecond)
 		synctest.Wait()
 		events.add("wait")
@@ -72,7 +74,7 @@ func TestDatabaseRecoveryActor_RetriesFullPreparationUntilReadyAndWaitsForInterr
 		assert.Equal(t, int32(2), migrationCalls.Load())
 		assert.Equal(
 			t,
-			[]string{"ping", "wait", "ping", "migrate", "wait", "ping", "migrate"},
+			[]string{"ping", "ping", "ping", "wait", "ping", "migrate", "wait", "ping", "migrate"},
 			events.snapshot(),
 		)
 		assert.Equal(t, 2, logs.FilterMessage("Повторная попытка подготовить БД").Len())
