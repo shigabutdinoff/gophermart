@@ -18,9 +18,15 @@ const (
 
 func (s *Server) pinger() healthcheck.Pinger {
 	if s.sqlDB == nil {
-		return nil
+		return unavailableDB{}
 	}
 	return s.sqlDB
+}
+
+type unavailableDB struct{}
+
+func (unavailableDB) PingContext(context.Context) error {
+	return database.ErrUnavailable
 }
 
 func openDatabase(logger *zap.Logger, dsn string) (database.Session, *sql.DB) {

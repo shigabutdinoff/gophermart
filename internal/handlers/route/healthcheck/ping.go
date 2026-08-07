@@ -14,15 +14,10 @@ type Pinger interface {
 	PingContext(ctx context.Context) error
 }
 
-// Ping проверяет доступность БД.
+// Ping проверяет доступность БД, getDB возвращает непустой Pinger.
 func Ping(getDB func() Pinger) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
 		db := getDB()
-		if db == nil {
-			http.Error(res, "БД не подключена", http.StatusInternalServerError)
-			return
-		}
-
 		ctx, cancel := context.WithTimeout(req.Context(), PingTimeout)
 		defer cancel()
 		if err := db.PingContext(ctx); err != nil {
