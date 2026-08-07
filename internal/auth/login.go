@@ -4,35 +4,52 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"go.uber.org/zap"
 )
+
+const dummyPassword = "password of a user that does not exist"
 
 // LoginService проверяет учётные данные и выпускает токен.
 type LoginService struct {
-	users    UserFinder
-	verifier PasswordVerifier
-	tokens   TokenIssuer
-	limiter  *LoginLimiter
+	logger    *zap.Logger
+	users     UserFinder
+	verifier  PasswordVerifier
+	tokens    TokenIssuer
+	limiter   *LoginLimiter
+	dummyHash string
+}
+
+type loginPasswords interface {
+	PasswordHasher
+	PasswordVerifier
 }
 
 // NewLoginService собирает службу входа из её обязательных участников.
 // Без своего ограничителя служба берёт умолчания NewLoginLimiter.
 func NewLoginService(
+	logger *zap.Logger,
 	users UserFinder,
-	verifier PasswordVerifier,
+	passwords loginPasswords,
 	tokens TokenIssuer,
 	limiters ...*LoginLimiter,
-) *LoginService {
+) (*LoginService, error) {
+	dummyHash, err := passwords.Hash(dummyPassword)
+	if err != nil {
+		return nil, fmt.Errorf("hash dummy password: %w", err)
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	limiter := NewLoginLimiter()
 	if len(limiters) != 0 && limiters[0] != nil {
 		limiter = limiters[0]
 	}
 
 	return &LoginService{
-		users:    users,
-		verifier: verifier,
-		tokens:   tokens,
-		limiter:  limiter,
-	}
+		logger: logger, users: users, verifier: passwords, tokens: tokens,
+		limiter: limiter, dummyHash: dummyHash,
+	}, nil
 }
 
 // Login проверяет учётные данные и выпускает новый токен.
@@ -55,6 +72,10 @@ func (s *LoginService) Login(
 	user, err := s.users.FindByLogin(ctx, credentials.Login)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
+			dummyErr := s.verifier.Verify(s.dummyHash, credentials.Password)
+			if dummyErr != nil && !errors.Is(dummyErr, ErrPasswordMismatch) {
+				s.logger.Error("Не удалось проверить хеш-пустышку", zap.Error(dummyErr))
+			}
 			s.limiter.Hit(key)
 			return LoginResult{}, ErrInvalidCredentials
 		}

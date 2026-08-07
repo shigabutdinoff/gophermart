@@ -118,7 +118,10 @@ type depsOptions struct {
 
 // buildDeps собирает зависимости маршрутов поверх хранилищ и менеджера токенов.
 func buildDeps(options depsOptions) (deps, error) {
-	authDeps := buildAuthDeps(options.session, options.tokens)
+	authDeps, err := buildAuthDeps(options.logger, options.session, options.tokens)
+	if err != nil {
+		return deps{}, err
+	}
 	storedOrders := orderrepository.New(options.session)
 	storedBalance := balancerepository.New(options.session)
 	buildQueue := options.buildQueue
@@ -160,18 +163,25 @@ func buildBalanceDeps(storedBalance *balancerepository.Repository) balanceroute.
 }
 
 // buildAuthDeps собирает регистрацию и вход поверх хранилища пользователей.
-func buildAuthDeps(session database.Session, tokens *auth.JWTManager) authentication.Deps {
+func buildAuthDeps(
+	logger *zap.Logger,
+	session database.Session,
+	tokens *auth.JWTManager,
+) (authentication.Deps, error) {
 	users := userrepository.New(session)
 	passwords := auth.Argon2Passwords{}
 	registration := auth.NewRegisterService(users, passwords, tokens)
-	login := auth.NewLoginService(users, passwords, tokens)
+	login, err := auth.NewLoginService(logger, users, passwords, tokens)
+	if err != nil {
+		return authentication.Deps{}, err
+	}
 
 	return authentication.Deps{
 		Register: registration.Register,
 		Login: func(ctx context.Context, credentials auth.Credentials, client string) (auth.LoginResult, error) {
 			return login.Login(ctx, credentials, client)
 		},
-	}
+	}, nil
 }
 
 func buildOrderDeps(storedOrders *orderrepository.Repository) ordersroute.Deps {

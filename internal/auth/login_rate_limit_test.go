@@ -19,11 +19,6 @@ const (
 	loginRetryWait = 12
 )
 
-// serviceWithLimiter собирает вход с подставным ограничителем попыток.
-func (c loginCollaborators) serviceWithLimiter(limiter *auth.LoginLimiter) *auth.LoginService {
-	return auth.NewLoginService(c.users, c.passwords, c.issuer, limiter)
-}
-
 func loginAttempt(service *auth.LoginService) (auth.LoginResult, error) {
 	return service.Login(
 		context.Background(),
@@ -53,6 +48,8 @@ func TestLoginServiceInvalidCredentialsHitOnlyTheirExactKey(t *testing.T) {
 	collaborators := newLoginCollaborators(t)
 	collaborators.users.EXPECT().FindByLogin(mock.Anything, "user").
 		Return(auth.User{}, auth.ErrUserNotFound).Once()
+	collaborators.passwords.EXPECT().Verify("dummy-hash", "password").
+		Return(auth.ErrPasswordMismatch).Once()
 	limiter := auth.NewLoginLimiter()
 
 	_, err := loginAttempt(collaborators.serviceWithLimiter(limiter))

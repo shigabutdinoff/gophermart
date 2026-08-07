@@ -21,6 +21,7 @@ packages:
       Withdrawer:
   github.com/shigabutdinoff/gophermart/internal/auth:
     interfaces:
+      loginPasswords:
       PasswordHasher:
       PasswordVerifier:
       TokenIssuer:

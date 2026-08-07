@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
 	authmocks "github.com/shigabutdinoff/gophermart/internal/auth/mocks"
@@ -17,8 +18,9 @@ import (
 // loginCollaborators держит три узких зависимости входа. Незаявленный вызов
 // мока валит тест сам, поэтому «не звали» отдельной проверки не требует.
 type loginCollaborators struct {
+	t         *testing.T
 	users     *authmocks.MockUserFinder
-	passwords *authmocks.MockPasswordVerifier
+	passwords *authmocks.MockLoginPasswords
 	issuer    *authmocks.MockTokenIssuer
 }
 
@@ -26,14 +28,25 @@ func newLoginCollaborators(t *testing.T) loginCollaborators {
 	t.Helper()
 
 	return loginCollaborators{
+		t:         t,
 		users:     authmocks.NewMockUserFinder(t),
-		passwords: authmocks.NewMockPasswordVerifier(t),
+		passwords: authmocks.NewMockLoginPasswords(t),
 		issuer:    authmocks.NewMockTokenIssuer(t),
 	}
 }
 
 func (c loginCollaborators) service() *auth.LoginService {
-	return auth.NewLoginService(c.users, c.passwords, c.issuer)
+	return c.serviceWithLimiter(nil)
+}
+
+// serviceWithLimiter собирает вход, попутно объявляя хеш-пустышку.
+func (c loginCollaborators) serviceWithLimiter(limiter *auth.LoginLimiter) *auth.LoginService {
+	c.t.Helper()
+	c.passwords.EXPECT().Hash(mock.Anything).Return("dummy-hash", nil).Once()
+	service, err := auth.NewLoginService(zap.NewNop(), c.users, c.passwords, c.issuer, limiter)
+	require.NoError(c.t, err)
+
+	return service
 }
 
 func TestLoginServiceLoginIssuesTokenForNormalizedLogin(t *testing.T) {
@@ -121,12 +134,16 @@ func TestLoginServiceLoginReturnsInternalFailures(t *testing.T) {
 }
 
 // expectFindAndVerify заявляет ровно те вызовы, до которых вход доходит:
-// после отказа поиска пароль не сверяется.
+// неизвестный логин сверяет пароль с пустышкой, внутренний отказ поиска не сверяет.
 func expectFindAndVerify(c loginCollaborators, findErr, verifyErr error) {
 	c.users.EXPECT().FindByLogin(mock.Anything, "alice").
 		Return(auth.User{ID: 7, PasswordHash: "stored-hash"}, findErr).Once()
-	if findErr != nil {
-		return
+	switch {
+	case errors.Is(findErr, auth.ErrUserNotFound):
+		c.passwords.EXPECT().Verify("dummy-hash", "password").
+			Return(auth.ErrPasswordMismatch).Once()
+	case findErr != nil:
+	default:
+		c.passwords.EXPECT().Verify("stored-hash", "password").Return(verifyErr).Once()
 	}
-	c.passwords.EXPECT().Verify("stored-hash", "password").Return(verifyErr).Once()
 }
