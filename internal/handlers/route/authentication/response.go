@@ -7,10 +7,8 @@ import (
 	"github.com/go-chi/render"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 )
-
-// SessionCookieName is the cookie carrying the same JWT as the Bearer response header.
-const SessionCookieName = "gophermart_session"
 
 // Тексты ответов маршрутов аутентификации.
 const (
@@ -20,7 +18,7 @@ const (
 	MessageBodyTooLarge       = "Тело запроса слишком велико"
 	MessageLoginTaken         = "Логин уже занят"
 	MessageInvalidCredentials = "Неверная пара логин/пароль"
-	MessageTooManyAttempts    = "Слишком много попыток входа"
+	MessageTooManyAttempts    = "Слишком много попыток аутентификации"
 	MessageInternalError      = "Внутренняя ошибка сервиса"
 )
 
@@ -39,6 +37,11 @@ var credentialsMessages = map[auth.CredentialsFormatError]string{
 		"Пароль длиннее %d символов", auth.MaxPasswordRunes,
 	),
 	{Field: "password", Rule: "required"}: "Пароль не может быть пустым",
+}
+
+// TooManyAttempts answers a login request rejected by the rate limit.
+func TooManyAttempts(w http.ResponseWriter, r *http.Request) {
+	writeMessage(w, r, http.StatusTooManyRequests, MessageTooManyAttempts)
 }
 
 // messageResponse is the single-field body of every authentication response.
@@ -74,7 +77,7 @@ func writeAuthenticated(
 ) {
 	w.Header().Set("Authorization", "Bearer "+token.Value)
 	http.SetCookie(w, &http.Cookie{
-		Name:    SessionCookieName,
+		Name:    authorization.SessionCookieName,
 		Value:   token.Value,
 		Path:    "/",
 		Expires: token.ExpiresAt,

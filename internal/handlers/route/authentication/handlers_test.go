@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 )
 
 var handlerTestToken = auth.IssuedToken{
@@ -246,7 +247,7 @@ func TestRegister_ValidMediaTypesNormalizeAndIgnoreUnknownFields(t *testing.T) {
 			cookies := result.Cookies()
 			require.Len(t, cookies, 1)
 			cookie := cookies[0]
-			assert.Equal(t, SessionCookieName, cookie.Name)
+			assert.Equal(t, authorization.SessionCookieName, cookie.Name)
 			assert.Equal(t, "signed-token", cookie.Value)
 			assert.Equal(t, "/", cookie.Path)
 			assert.True(t, cookie.HttpOnly)

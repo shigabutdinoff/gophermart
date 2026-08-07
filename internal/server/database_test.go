@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -45,7 +46,7 @@ func newServerWithDatabase(t *testing.T) (*Server, *sql.DB) {
 	sqlDB, err := gormDB.DB()
 	require.NoError(t, err)
 
-	server, err := newServer(zap.NewNop(), config.Default(), sqlDB)
+	server, err := newServer(zap.NewNop(), config.Default(), time.Now, gormDB, sqlDB)
 	require.NoError(t, err)
 	return server, sqlDB
 }
@@ -118,6 +119,15 @@ func TestCheckDatabaseAndMigrate_SuccessfulPingHandlesMigrationResult(t *testing
 			assert.Equal(t, tt.expectedLevel, entries[0].Level)
 		})
 	}
+}
+
+func TestCloseDatabase_ClosesPool(t *testing.T) {
+	s, sqlDB := newServerWithDatabase(t)
+
+	s.closeDatabase()
+
+	assert.EqualError(t, sqlDB.PingContext(context.Background()), "sql: database is closed")
+	assert.NotPanics(t, s.closeDatabase, "повторное закрытие безопасно")
 }
 
 func TestServer_Run_ClosesDatabaseOnListenError(t *testing.T) {

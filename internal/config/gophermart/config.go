@@ -14,6 +14,7 @@ type Config struct {
 	DatabaseURI      string `env:"DATABASE_URI"`
 	AccrualAddress   string `env:"ACCRUAL_SYSTEM_ADDRESS"`
 	RequestBodyLimit int64  `env:"REQUEST_BODY_LIMIT"`
+	JWTSecret        string `env:"JWT_SECRET"`
 }
 
 // Default возвращает конфигурацию со значениями по умолчанию.

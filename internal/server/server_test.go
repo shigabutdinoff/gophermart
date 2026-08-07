@@ -47,6 +47,31 @@ func TestNew(t *testing.T) {
 	assert.NotNil(t, s.router)
 }
 
+func TestNew_RejectsShortSecretBeforeListenWithoutLeak(t *testing.T) {
+	cfg := config.Default()
+	cfg.JWTSecret = "short-secret"
+
+	server, err := New(zap.NewNop(), cfg)
+
+	assert.Nil(t, server)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), cfg.JWTSecret)
+}
+
+func TestNew_BuildsAuthDependenciesBeforeRouter(t *testing.T) {
+	cfg := config.Default()
+	cfg.JWTSecret = "0123456789abcdef0123456789abcdef"
+
+	server, err := New(zap.NewNop(), cfg)
+
+	require.NoError(t, err)
+	assert.NotNil(t, server.router)
+	assert.NotNil(t, server.register)
+	assert.NotNil(t, server.login)
+	assert.NotNil(t, server.authorize)
+	assert.Empty(t, server.JWTSecret)
+}
+
 func TestServer_ServesAndLogsStart(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	s := mustNew(t, zap.New(core), config.Default())

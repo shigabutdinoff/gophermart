@@ -10,6 +10,8 @@ func (s *Server) setupRoutes() {
 	router := chi.NewRouter()
 
 	router.Use(logging.WithLogging(s.logger))
+	router.Post("/api/user/register", s.register)
+	router.Post("/api/user/login", s.login)
 
 	s.router = router
 }

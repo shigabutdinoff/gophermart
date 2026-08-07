@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -82,5 +83,22 @@ func TestRouter_LogsEveryRequest(t *testing.T) {
 		fields, ok := byPath[tc.path+" "+tc.method]
 		require.True(t, ok, "нет записи для %s %s", tc.method, tc.path)
 		assert.EqualValues(t, tc.want, fields["http.response.status_code"])
+	}
+}
+
+func TestRouter_AuthenticationRoutesArePublic(t *testing.T) {
+	_, srv := newTestServer(t, zap.NewNop(), config.Default())
+
+	for _, path := range []string{"/api/user/register", "/api/user/login"} {
+		req, err := http.NewRequest(
+			http.MethodPost,
+			srv.URL+path,
+			strings.NewReader(`{"login":"user","password":"password"}`),
+		)
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	}
 }

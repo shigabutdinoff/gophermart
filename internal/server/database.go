@@ -5,23 +5,24 @@ import (
 	"database/sql"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
 
-func openDatabase(logger *zap.Logger, dsn string) *sql.DB {
+func openDatabase(logger *zap.Logger, dsn string) (*gorm.DB, *sql.DB) {
 	gormDB, err := database.Connection(dsn)
 	if err != nil {
 		logger.Warn("Не удалось открыть соединение с БД", zap.Error(err))
-		return nil
+		return nil, nil
 	}
 
 	sqlDB, err := gormDB.DB()
 	if err != nil {
 		logger.Warn("Не удалось получить пул соединений БД", zap.Error(err))
-		return nil
+		return nil, nil
 	}
-	return sqlDB
+	return gormDB, sqlDB
 }
 
 func (s *Server) initDatabase(ctx context.Context) {
@@ -58,11 +59,15 @@ func (s *Server) checkDatabaseAndMigrate(
 }
 
 func (s *Server) closeDatabase() {
-	if s.sqlDB == nil {
+	closeDatabaseHandle(s.logger, s.sqlDB)
+}
+
+func closeDatabaseHandle(logger *zap.Logger, sqlDB *sql.DB) {
+	if sqlDB == nil {
 		return
 	}
 
-	if err := s.sqlDB.Close(); err != nil {
-		s.logger.Warn("Не удалось закрыть соединение с БД", zap.Error(err))
+	if err := sqlDB.Close(); err != nil {
+		logger.Warn("Не удалось закрыть соединение с БД", zap.Error(err))
 	}
 }

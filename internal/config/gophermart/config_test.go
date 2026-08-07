@@ -13,11 +13,31 @@ import (
 func clearEnv(t *testing.T) {
 	t.Helper()
 
-	for _, name := range []string{"RUN_ADDRESS", "DATABASE_URI", "ACCRUAL_SYSTEM_ADDRESS", "REQUEST_BODY_LIMIT"} {
+	for _, name := range []string{
+		"RUN_ADDRESS",
+		"DATABASE_URI",
+		"ACCRUAL_SYSTEM_ADDRESS",
+		"REQUEST_BODY_LIMIT",
+		"JWT_SECRET",
+	} {
 		// t.Setenv запоминает исходное состояние, Unsetenv очищает на время теста
 		t.Setenv(name, "")
 		require.NoError(t, os.Unsetenv(name))
 	}
+}
+
+func TestParse_JWTSecretComesOnlyFromEnvironment(t *testing.T) {
+	const secret = "0123456789abcdef0123456789abcdef"
+	clearEnv(t)
+	t.Setenv("JWT_SECRET", secret)
+
+	cfg, err := Parse(nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, secret, cfg.JWTSecret)
+
+	_, err = Parse([]string{"--jwt-secret", secret})
+	require.Error(t, err)
 }
 
 func TestParse_Defaults(t *testing.T) {
