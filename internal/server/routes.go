@@ -28,7 +28,7 @@ func (s *Server) setupRoutes() {
 }
 
 func (s *Server) registerHealthcheck(router *chi.Mux) {
-	router.Get("/ping", healthcheck.Ping(func() healthcheck.Pinger { return s.sqlDB }))
+	router.Get("/ping", healthcheck.Ping(s.pinger))
 }
 
 func (s *Server) installMiddleware(router *chi.Mux) {

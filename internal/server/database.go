@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route/healthcheck"
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
 
@@ -14,6 +15,13 @@ const (
 	databaseMaxConns        = 10
 	databaseConnMaxIdleTime = time.Minute
 )
+
+func (s *Server) pinger() healthcheck.Pinger {
+	if s.sqlDB == nil {
+		return nil
+	}
+	return s.sqlDB
+}
 
 func openDatabase(logger *zap.Logger, dsn string) (database.Session, *sql.DB) {
 	session, err := database.Open(dsn)
