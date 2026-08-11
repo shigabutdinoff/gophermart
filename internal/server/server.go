@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/netip"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -33,16 +32,23 @@ const (
 	DefaultReadTimeout       = 30 * time.Second
 	DefaultWriteTimeout      = 30 * time.Second
 	DefaultIdleTimeout       = 60 * time.Second
-	DefaultRetryDelay        = time.Second
+	// пауза общая для восстановления БД и подъёма очереди заданий
+	DefaultRetryDelay = time.Second
 )
 
+// Option настраивает сервер до сборки его зависимостей.
 type Option func(*serverOptions)
-type serverOptions struct{ shutdownTimeout time.Duration }
 
+type serverOptions struct {
+	shutdownTimeout time.Duration
+}
+
+// WithShutdownTimeout задаёт единый срок остановки сервера.
 func WithShutdownTimeout(timeout time.Duration) Option {
 	return func(options *serverOptions) { options.shutdownTimeout = timeout }
 }
 
+// Server запускает HTTP-сервер и останавливает его (graceful shutdown).
 type Server struct {
 	router           *chi.Mux
 	logger           *zap.Logger
@@ -64,7 +70,8 @@ type deps struct {
 	orders              ordersroute.Deps
 	tokenParser         authorization.TokenParser
 	pendingOrderResumer pendingOrderResumer
-	runner              *riverRunner
+	// runner заполнен, только когда очередь способна выполнять задания
+	runner *riverRunner
 }
 
 // pendingOrderResumer возвращает незавершённые заказы в очередь опроса.
@@ -74,6 +81,12 @@ type pendingOrderResumer interface {
 
 // New создаёт сервер с переданной конфигурацией.
 func New(logger *zap.Logger, cfg config.Config, options ...Option) (*Server, error) {
+	secret, err := auth.EnsureSecret(logger, cfg.JWTSecret)
+	if err != nil {
+		return nil, err
+	}
+	cfg.JWTSecret = secret
+
 	session, sqlDB := openDatabase(logger, cfg.DatabaseURI)
 	server, err := newServer(logger, cfg, session, sqlDB, options...)
 	if err != nil {
@@ -98,10 +111,14 @@ func newServer(
 	if err != nil {
 		return nil, err
 	}
+	// ключ живёт в JWTManager, копию в конфигурации сервера не держим
+	cfg.JWTSecret = ""
+
 	settings := serverOptions{shutdownTimeout: DefaultShutdownTimeout}
 	for _, apply := range options {
 		apply(&settings)
 	}
+
 	built, err := buildDeps(depsOptions{
 		logger:          logger,
 		queue:           cfg.Queue,
@@ -138,8 +155,8 @@ type depsOptions struct {
 	session         database.Session
 	sqlDB           *sql.DB
 	tokens          *auth.JWTManager
-	buildQueue      queueClientBuilder
 	shutdownTimeout time.Duration
+	buildQueue      queueClientBuilder
 }
 
 // buildDeps собирает зависимости маршрутов поверх хранилищ и менеджера токенов.
@@ -213,15 +230,13 @@ func buildAuthDeps(
 		return authentication.Deps{}, err
 	}
 
-	return authentication.Deps{
-		Register: registration.Register,
-		Login: func(ctx context.Context, credentials auth.Credentials, client netip.Addr) (auth.LoginResult, error) {
-			return login.Login(ctx, credentials, client)
-		},
-	}, nil
+	return authentication.Deps{Register: registration.Register, Login: login.Login}, nil
 }
 
-func buildOrderDeps(storedOrders *orderrepository.Repository) ordersroute.Deps {
+// buildOrderDeps собирает загрузку и список заказов поверх их хранилища.
+func buildOrderDeps(
+	storedOrders *orderrepository.Repository,
+) ordersroute.Deps {
 	return ordersroute.Deps{
 		Upload: order.NewUploadService(storedOrders).Upload,
 		List:   order.NewListService(storedOrders).List,

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -28,13 +29,15 @@ func TestResolveSecretRejectsShortConfiguredValueWithoutLeakingIt(t *testing.T) 
 	require.NotContains(t, err.Error(), configured)
 }
 
-func TestResolveSecretGeneratesDistinct32ByteValues(t *testing.T) {
-	first, err := ResolveSecret("")
-	require.NoError(t, err)
-	second, err := ResolveSecret("")
-	require.NoError(t, err)
+func TestResolveSecretRejectsMissingValue(t *testing.T) {
+	_, err := ResolveSecret("")
 
-	require.Len(t, first, SecretSize)
-	require.Len(t, second, SecretSize)
-	require.NotEqual(t, first, second)
+	require.Error(t, err)
+}
+
+func TestResolveSecretAcceptsGeneratedValue(t *testing.T) {
+	secret, err := ResolveSecret(GenerateSecret())
+
+	require.NoError(t, err)
+	require.Len(t, secret, hex.EncodedLen(SecretSize))
 }

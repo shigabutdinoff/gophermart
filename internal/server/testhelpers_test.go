@@ -17,11 +17,11 @@ const testJWTSecret = "0123456789abcdef0123456789abcdef"
 // testAccrualAddress убирает из журнала предупреждение об отключённом опросе
 const testAccrualAddress = "localhost:8081"
 
+// newTestConfig даёт конфигурацию с готовым ключом, минуя генерацию в New
 func newTestConfig() config.Config {
 	cfg := config.Default()
 	cfg.JWTSecret = testJWTSecret
 	cfg.AccrualAddress = testAccrualAddress
-
 	return cfg
 }
 

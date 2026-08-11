@@ -30,8 +30,8 @@ type JWTManager struct {
 
 // NewJWTManager забирает копию ключа, чужие правки на неё не влияют.
 func NewJWTManager(secret []byte) (*JWTManager, error) {
-	if len(secret) < SecretSize {
-		return nil, fmt.Errorf("JWT secret must be at least %d bytes", SecretSize)
+	if err := checkSecretLength(len(secret)); err != nil {
+		return nil, err
 	}
 
 	return &JWTManager{

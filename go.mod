@@ -15,6 +15,7 @@ require (
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/joho/godotenv v1.5.1
 	github.com/klauspost/compress v1.19.0
 	github.com/moby/locker v1.0.1
 	github.com/oklog/run v1.2.0

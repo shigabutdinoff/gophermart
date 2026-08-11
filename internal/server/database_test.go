@@ -52,7 +52,7 @@ func newServerWithDatabase(t *testing.T) (*Server, *sql.DB) {
 	require.NoError(t, err)
 	sqlDB, err := session.Pool()
 	require.NoError(t, err)
-	server, err := newServer(zap.NewNop(), config.Default(), session, sqlDB)
+	server, err := newServer(zap.NewNop(), newTestConfig(), session, sqlDB)
 	require.NoError(t, err)
 	return server, sqlDB
 }
@@ -219,7 +219,7 @@ func TestServerSharesOnePoolAcrossRepositoryMigrationsAndShutdown(t *testing.T) 
 
 	server, err := newServer(
 		zap.NewNop(),
-		config.Default(),
+		newTestConfig(),
 		database.NewSession(gormDB),
 		sqlDB,
 	)
