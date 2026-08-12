@@ -3,11 +3,17 @@ package server
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
+)
+
+const (
+	databaseMaxConns        = 10
+	databaseConnMaxIdleTime = time.Minute
 )
 
 func openDatabase(logger *zap.Logger, dsn string) (*gorm.DB, *sql.DB) {
@@ -22,14 +28,14 @@ func openDatabase(logger *zap.Logger, dsn string) (*gorm.DB, *sql.DB) {
 		logger.Warn("Не удалось получить пул соединений БД", zap.Error(err))
 		return nil, nil
 	}
+	sqlDB.SetMaxOpenConns(databaseMaxConns)
+	sqlDB.SetMaxIdleConns(databaseMaxConns)
+	sqlDB.SetConnMaxIdleTime(databaseConnMaxIdleTime)
+
 	return gormDB, sqlDB
 }
 
-func (s *Server) initDatabase(ctx context.Context) {
-	s.initDatabaseWith(ctx, database.Migrate)
-}
-
-func (s *Server) initDatabaseWith(
+func (s *Server) initDatabase(
 	ctx context.Context,
 	migrate func(context.Context, *sql.DB) error,
 ) {
@@ -37,20 +43,12 @@ func (s *Server) initDatabaseWith(
 		return
 	}
 
-	s.checkDatabaseAndMigrate(ctx, s.sqlDB, migrate)
-}
-
-func (s *Server) checkDatabaseAndMigrate(
-	ctx context.Context,
-	db *sql.DB,
-	migrate func(context.Context, *sql.DB) error,
-) {
-	if err := db.PingContext(ctx); err != nil {
+	if err := s.sqlDB.PingContext(ctx); err != nil {
 		s.logger.Error("БД недоступна, миграции пропущены", zap.Error(err))
 		return
 	}
 
-	if err := migrate(ctx, db); err != nil {
+	if err := migrate(ctx, s.sqlDB); err != nil {
 		s.logger.Error("Не удалось применить миграции", zap.Error(err))
 		return
 	}

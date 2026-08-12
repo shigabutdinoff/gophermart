@@ -7,11 +7,13 @@ import (
 
 	"github.com/oklog/run"
 	"go.uber.org/zap"
+
+	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
 
 // Run работает до отмены контекста, затем останавливается за shutdownTimeout.
 func (s *Server) Run(ctx context.Context) error {
-	s.initDatabase(ctx)
+	s.initDatabase(ctx, database.Migrate)
 	defer s.closeDatabase()
 
 	if s.ln == nil {

@@ -101,9 +101,8 @@ func TestRouterMissingAuthSchemaAfterMigrationFailureReturnsControlledError(t *t
 	t.Cleanup(server.closeDatabase)
 	migrationErr := errors.New("migration failed")
 
-	server.checkDatabaseAndMigrate(
+	server.initDatabase(
 		context.Background(),
-		sqlDB,
 		func(context.Context, *sql.DB) error { return migrationErr },
 	)
 

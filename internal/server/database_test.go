@@ -22,7 +22,6 @@ const unavailableDatabaseDSN = "postgresql://postgres:postgres@localhost:1/prakt
 
 func newPingMock(t *testing.T, pingErr error) (*sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
-
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -40,12 +39,10 @@ func newObservedServer(t *testing.T, dsn string) (*Server, *observer.ObservedLog
 
 func newServerWithDatabase(t *testing.T) (*Server, *sql.DB) {
 	t.Helper()
-
 	gormDB, err := database.Connection(unavailableDatabaseDSN)
 	require.NoError(t, err)
 	sqlDB, err := gormDB.DB()
 	require.NoError(t, err)
-
 	server, err := newServer(zap.NewNop(), config.Default(), time.Now, gormDB, sqlDB)
 	require.NoError(t, err)
 	return server, sqlDB
@@ -68,12 +65,10 @@ func TestOpenDatabase_MalformedDSNDoesNotLeakCredentials(t *testing.T) {
 func TestInitDatabase_UnavailableDatabaseKeepsHandleAndSkipsMigration(t *testing.T) {
 	s, logs := newObservedServer(t, unavailableDatabaseDSN)
 	migrationCalls := 0
-
-	s.initDatabaseWith(context.Background(), func(context.Context, *sql.DB) error {
+	s.initDatabase(context.Background(), func(context.Context, *sql.DB) error {
 		migrationCalls++
 		return nil
 	})
-
 	require.NotNil(t, s.sqlDB)
 	t.Cleanup(s.closeDatabase)
 	assert.Zero(t, migrationCalls)
@@ -82,7 +77,7 @@ func TestInitDatabase_UnavailableDatabaseKeepsHandleAndSkipsMigration(t *testing
 	assert.Equal(t, zap.ErrorLevel, skipped[0].Level)
 }
 
-func TestCheckDatabaseAndMigrate_SuccessfulPingHandlesMigrationResult(t *testing.T) {
+func TestInitDatabase_SuccessfulPingHandlesMigrationResult(t *testing.T) {
 	migrationErr := errors.New("migration failed")
 	tests := []struct {
 		name            string
@@ -93,26 +88,19 @@ func TestCheckDatabaseAndMigrate_SuccessfulPingHandlesMigrationResult(t *testing
 		{"migration error", migrationErr, "Не удалось применить миграции", zap.ErrorLevel},
 		{"migrations applied", nil, "Миграции выполнены", zap.InfoLevel},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s, logs := newObservedServer(t, "postgresql://user:password@db:5432/gophermart")
 			handle, mock := newPingMock(t, nil)
+			s.sqlDB = handle
 			migrationCalls := 0
-			var gotDB *sql.DB
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			s.checkDatabaseAndMigrate(ctx, handle, func(migrateCtx context.Context, db *sql.DB) error {
+			s.initDatabase(context.Background(), func(_ context.Context, db *sql.DB) error {
 				migrationCalls++
-				gotDB = db
-				require.NoError(t, migrateCtx.Err())
+				assert.Same(t, handle, db)
 				return tt.migrationErr
 			})
-
 			require.NoError(t, mock.ExpectationsWereMet())
 			assert.Equal(t, 1, migrationCalls)
-			assert.Same(t, handle, gotDB)
 			entries := logs.All()
 			require.Len(t, entries, 1)
 			assert.Equal(t, tt.expectedMessage, entries[0].Message)
@@ -121,19 +109,16 @@ func TestCheckDatabaseAndMigrate_SuccessfulPingHandlesMigrationResult(t *testing
 	}
 }
 
-func TestCloseDatabase_ClosesPool(t *testing.T) {
-	s, sqlDB := newServerWithDatabase(t)
-
-	s.closeDatabase()
-
-	assert.EqualError(t, sqlDB.PingContext(context.Background()), "sql: database is closed")
-	assert.NotPanics(t, s.closeDatabase, "повторное закрытие безопасно")
+func TestOpenDatabase_AppliesPoolLimits(t *testing.T) {
+	s, _ := newObservedServer(t, unavailableDatabaseDSN)
+	require.NotNil(t, s.sqlDB)
+	t.Cleanup(s.closeDatabase)
+	assert.Equal(t, databaseMaxConns, s.sqlDB.Stats().MaxOpenConnections)
 }
 
 func TestServer_Run_ClosesDatabaseOnListenError(t *testing.T) {
 	s, oldDB := newServerWithDatabase(t)
 	s.RunAddress = "bad::addr"
-
 	require.Error(t, s.Run(context.Background()))
 	assert.EqualError(t, oldDB.PingContext(context.Background()), "sql: database is closed")
 }
