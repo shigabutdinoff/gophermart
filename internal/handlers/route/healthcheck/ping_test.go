@@ -53,14 +53,6 @@ func TestPing_DatabaseUnreachable(t *testing.T) {
 	assert.Equal(t, "Нет соединения с БД\n", rec.Body.String())
 }
 
-func TestPing_NoDatabase(t *testing.T) {
-	rec := servePing(&fakePinger{err: errors.New("database is unavailable")})
-
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Equal(t, "text/plain; charset=utf-8", rec.Header().Get("Content-Type"))
-	assert.Equal(t, "Нет соединения с БД\n", rec.Body.String())
-}
-
 func TestPing_UsesCurrentDatabaseOnEveryRequest(t *testing.T) {
 	var current Pinger = &fakePinger{err: errors.New("database is unavailable")}
 	getterCalls := 0
