@@ -137,6 +137,26 @@ func TestInitDatabase_RetriesUntilDatabaseAppears(t *testing.T) {
 	assert.Equal(t, 1, logs.FilterMessage("Миграции выполнены").Len())
 }
 
+func TestInitDatabase_LimitsEachPingAttempt(t *testing.T) {
+	s, logs := newObservedServer(t, "postgresql://user:password@db:5432/gophermart")
+	s.retryDelay = time.Millisecond
+	handle, mock := newPingMock(t)
+	// 800 мс меньше исходной секунды, но не укладывается в лимит одной попытки.
+	mock.ExpectPing().WillDelayFor(800 * time.Millisecond)
+	mock.ExpectPing()
+	s.sqlDB = handle
+	migrationCalls := 0
+
+	s.initDatabase(context.Background(), func(context.Context, *sql.DB) error {
+		migrationCalls++
+		return nil
+	})
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	assert.Equal(t, 1, migrationCalls)
+	assert.Equal(t, 1, logs.FilterMessage("Повторная попытка подключения к БД").Len())
+}
+
 func TestInitDatabase_GivesUpAfterConfiguredAttempts(t *testing.T) {
 	s, logs := newObservedServer(t, "postgresql://user:SECRETPW@db:5432/gophermart")
 	s.retryDelay = time.Millisecond
