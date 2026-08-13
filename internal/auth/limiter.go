@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moby/locker"
 	"golang.org/x/time/rate"
 )
 
@@ -23,11 +24,25 @@ var loginRefill = rate.Every(LoginWindow / MaxLoginAttempts)
 type LoginLimiter struct {
 	mu        sync.Mutex
 	limiters  map[string]*rate.Limiter
+	gates     *locker.Locker
 	lastSweep time.Time
 }
 
 func NewLoginLimiter() *LoginLimiter {
-	return &LoginLimiter{limiters: make(map[string]*rate.Limiter)}
+	return &LoginLimiter{
+		limiters: make(map[string]*rate.Limiter),
+		gates:    locker.New(),
+	}
+}
+
+// Acquire выстраивает проверки одного ключа в очередь.
+func (l *LoginLimiter) Acquire(key string) func() {
+	l.gates.Lock(key)
+
+	var once sync.Once
+	return func() {
+		once.Do(func() { _ = l.gates.Unlock(key) })
+	}
 }
 
 // Check сообщает, исчерпан ли лимит, и Retry-After в целых секундах.

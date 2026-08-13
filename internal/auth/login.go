@@ -46,6 +46,8 @@ func (s *LoginService) Login(
 		client = DirectIP(remoteAddr[0])
 	}
 	key := credentials.Login + "\x00" + client
+	release := s.limiter.Acquire(key)
+	defer release()
 	if retryAfter, limited := s.limiter.Check(key); limited {
 		return LoginResult{RetryAfter: retryAfter}, ErrRateLimited
 	}
