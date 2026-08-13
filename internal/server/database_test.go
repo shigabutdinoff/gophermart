@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +16,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
@@ -114,6 +119,49 @@ func TestOpenDatabase_AppliesPoolLimits(t *testing.T) {
 	require.NotNil(t, s.sqlDB)
 	t.Cleanup(s.closeDatabase)
 	assert.Equal(t, databaseMaxConns, s.sqlDB.Stats().MaxOpenConnections)
+}
+
+func TestServerSharesOnePoolAcrossRepositoryMigrationsAndShutdown(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	gormDB, err := gorm.Open(
+		postgres.New(postgres.Config{Conn: sqlDB}),
+		&gorm.Config{DisableAutomaticPing: true, DryRun: true, TranslateError: true},
+	)
+	require.NoError(t, err)
+
+	var repositoryPool *sql.DB
+	require.NoError(t, gormDB.Callback().Create().Before("gorm:create").Register(
+		"test:observe-server-repository-pool",
+		func(tx *gorm.DB) {
+			repositoryPool, _ = tx.DB()
+		},
+	))
+
+	server, err := newServer(zap.NewNop(), config.Default(), time.Now, gormDB, sqlDB)
+	require.NoError(t, err)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/user/register",
+		strings.NewReader(`{"login":"user","password":"password"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	server.register(httptest.NewRecorder(), request)
+
+	assert.Same(t, sqlDB, repositoryPool)
+
+	mock.ExpectPing()
+	var migrationPool *sql.DB
+	server.initDatabase(context.Background(), func(_ context.Context, db *sql.DB) error {
+		migrationPool = db
+		return nil
+	})
+	assert.Same(t, sqlDB, migrationPool)
+
+	mock.ExpectClose()
+	server.closeDatabase()
+	require.NoError(t, mock.ExpectationsWereMet())
+	assert.EqualError(t, sqlDB.PingContext(context.Background()), "sql: database is closed")
 }
 
 func TestServer_Run_ClosesDatabaseOnListenError(t *testing.T) {
