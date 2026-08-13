@@ -71,8 +71,8 @@ func newServer(
 		logger:          logger,
 		shutdownTimeout: DefaultShutdownTimeout,
 		sqlDB:           sqlDB,
-		register:        authentication.Register(logger, now, registration.Register),
-		login:           authentication.Login(logger, now, login.Login),
+		register:        authentication.Register(logger, registration.Register),
+		login:           authentication.Login(logger, login.Login),
 		authorize:       authorization.Middleware(tokens.ParseRequest),
 		Config:          cfg,
 	}

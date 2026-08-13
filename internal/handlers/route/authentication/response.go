@@ -3,6 +3,7 @@ package authentication
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/render"
 
@@ -71,18 +72,16 @@ func writeMessage(w http.ResponseWriter, r *http.Request, status int, message st
 func writeAuthenticated(
 	w http.ResponseWriter,
 	r *http.Request,
-	now auth.Clock,
 	token auth.IssuedToken,
 	message string,
 ) {
 	w.Header().Set("Authorization", "Bearer "+token.Value)
 	http.SetCookie(w, &http.Cookie{
-		Name:    authorization.SessionCookieName,
-		Value:   token.Value,
-		Path:    "/",
-		Expires: token.ExpiresAt,
-		// срок куки считается теми же часами, что выдали токен
-		MaxAge:   int(token.ExpiresAt.Sub(now()).Seconds()),
+		Name:     authorization.SessionCookieName,
+		Value:    token.Value,
+		Path:     "/",
+		Expires:  token.ExpiresAt,
+		MaxAge:   int(auth.TokenTTL / time.Second),
 		HttpOnly: true,
 		Secure:   false,
 		SameSite: http.SameSiteLaxMode,

@@ -11,6 +11,9 @@ import (
 	schema "github.com/shigabutdinoff/gophermart/migrations"
 )
 
+// migrationsDir указывает корень встроенной файловой системы миграций
+const migrationsDir = "."
+
 // Двойник без ожиданий отвергает любой запрос, так же ведёт себя мёртвая БД.
 func TestMigrate_UnreachableDatabaseReturnsError(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -29,4 +32,16 @@ func TestMigrate_UsesEmbeddedMigrations(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, entries)
+}
+
+func TestNewMigrationProviderUsesEmbeddedMigrations(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	mock.ExpectClose()
+	t.Cleanup(func() { _ = db.Close() })
+
+	provider, err := newMigrationProvider(db)
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, provider.ListSources())
 }

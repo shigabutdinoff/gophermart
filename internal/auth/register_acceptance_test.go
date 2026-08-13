@@ -36,7 +36,7 @@ func TestRegisterConcurrentEquivalentLoginsCreateExactlyOneUser(t *testing.T) {
 	users.createRelease = createRelease
 	tokens := &acceptanceTokenIssuer{}
 	service := auth.NewRegisterService(users, auth.Argon2Passwords{}, tokens)
-	handler := authentication.Register(zap.NewNop(), time.Now, service.Register)
+	handler := authentication.Register(zap.NewNop(), service.Register)
 	responses := make([]*httptest.ResponseRecorder, len(bodies))
 	start := make(chan struct{})
 	var wait sync.WaitGroup
@@ -122,7 +122,7 @@ func TestRegisterFailuresDoNotPersistUserOrReturnToken(t *testing.T) {
 			users.createErr = test.storageErr
 			tokens := &acceptanceTokenIssuer{}
 			service := auth.NewRegisterService(users, test.passwords, tokens)
-			handler := authentication.Register(zap.NewNop(), time.Now, service.Register)
+			handler := authentication.Register(zap.NewNop(), service.Register)
 			request := httptest.NewRequest(
 				http.MethodPost,
 				"/api/user/register",

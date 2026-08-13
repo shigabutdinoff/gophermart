@@ -70,7 +70,7 @@ func TestHandlersLogInternalErrors(t *testing.T) {
 		{
 			name: "register",
 			handler: func(logger *zap.Logger, err error) http.HandlerFunc {
-				return Register(logger, time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+				return Register(logger, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 					return auth.IssuedToken{}, err
 				})
 			},
@@ -78,7 +78,7 @@ func TestHandlersLogInternalErrors(t *testing.T) {
 		{
 			name: "login",
 			handler: func(logger *zap.Logger, err error) http.HandlerFunc {
-				return Login(logger, time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+				return Login(logger, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 					return auth.IssuedToken{}, err
 				})
 			},
@@ -109,14 +109,14 @@ func TestHandlersDoNotLogClientErrors(t *testing.T) {
 	logger := zap.New(core)
 
 	serve(
-		Register(logger, time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+		Register(logger, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 			return auth.IssuedToken{}, auth.ErrLoginTaken
 		}),
 		"application/json",
 		`{"login":"user","password":"password"}`,
 	)
 	serve(
-		Login(logger, time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+		Login(logger, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 			return auth.IssuedToken{}, auth.ErrInvalidCredentials
 		}),
 		"application/json",
@@ -128,7 +128,7 @@ func TestHandlersDoNotLogClientErrors(t *testing.T) {
 
 func TestRegister_RejectsDataAfterJSONObject(t *testing.T) {
 	calls := 0
-	handler := Register(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+	handler := Register(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 		calls++
 		return auth.IssuedToken{Value: "token-value"}, nil
 	})
@@ -145,7 +145,7 @@ func TestRegister_RejectsDataAfterJSONObject(t *testing.T) {
 func TestRegister_OversizedTailAnswers413(t *testing.T) {
 	const limit = 64
 	calls := 0
-	handler := Register(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+	handler := Register(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 		calls++
 		return auth.IssuedToken{Value: "token-value"}, nil
 	})
@@ -162,7 +162,7 @@ func TestRegister_OversizedTailAnswers413(t *testing.T) {
 }
 
 func TestLogin_UnknownLoginAndWrongPasswordShareBody(t *testing.T) {
-	handler := Login(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+	handler := Login(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 		return auth.IssuedToken{}, auth.ErrInvalidCredentials
 	})
 
@@ -202,7 +202,7 @@ func TestRegister_NamesViolatedCredentialsRule(t *testing.T) {
 	messages := make([]string, 0, len(tests))
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := Register(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+			handler := Register(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 				return auth.IssuedToken{}, nil
 			})
 			response := serve(handler, "application/json", tt.body)
@@ -226,7 +226,7 @@ func TestRegister_ValidMediaTypesNormalizeAndIgnoreUnknownFields(t *testing.T) {
 	for _, mediaType := range mediaTypes {
 		t.Run(mediaType, func(t *testing.T) {
 			calls := 0
-			handler := Register(zap.NewNop(), time.Now, func(_ context.Context, credentials auth.Credentials) (auth.IssuedToken, error) {
+			handler := Register(zap.NewNop(), func(_ context.Context, credentials auth.Credentials) (auth.IssuedToken, error) {
 				calls++
 				assert.Equal(t, "юзер", credentials.Login)
 				assert.Equal(t, " password ", credentials.Password)
@@ -254,15 +254,15 @@ func TestRegister_ValidMediaTypesNormalizeAndIgnoreUnknownFields(t *testing.T) {
 			assert.False(t, cookie.Secure)
 			assert.Empty(t, cookie.Domain)
 			assert.Equal(t, http.SameSiteLaxMode, cookie.SameSite)
-			assert.Negative(t, cookie.MaxAge, "истёкший токен не продлевает куку")
+			assert.Equal(t, int(auth.TokenTTL/time.Second), cookie.MaxAge)
 			assert.Equal(t, handlerTestToken.ExpiresAt, cookie.Expires)
 		})
 	}
 }
 
-func TestRegister_CookieLifetimeFollowsIssuedToken(t *testing.T) {
+func TestRegister_CookieMaxAgeUsesTokenTTLAndExpiresUsesIssuedToken(t *testing.T) {
 	shortToken := auth.IssuedToken{Value: "short-token", ExpiresAt: time.Now().Add(5 * time.Minute)}
-	handler := Register(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+	handler := Register(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 		return shortToken, nil
 	})
 
@@ -272,13 +272,12 @@ func TestRegister_CookieLifetimeFollowsIssuedToken(t *testing.T) {
 	defer result.Body.Close()
 	cookies := result.Cookies()
 	require.Len(t, cookies, 1)
-	assert.InDelta(t, time.Until(shortToken.ExpiresAt).Seconds(), cookies[0].MaxAge, 2)
+	assert.Equal(t, int(auth.TokenTTL/time.Second), cookies[0].MaxAge)
 	assert.WithinDuration(t, shortToken.ExpiresAt, cookies[0].Expires, time.Second)
 }
 
 func TestRegister_CookieLifetimeFollowsInjectedClock(t *testing.T) {
-	now := func() time.Time { return handlerTestToken.IssuedAt }
-	handler := Register(zap.NewNop(), now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+	handler := Register(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 		return handlerTestToken, nil
 	})
 
@@ -312,7 +311,7 @@ func TestRegister_InvalidRequestsStopBeforeAction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			calls := 0
-			handler := Register(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+			handler := Register(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 				calls++
 				return handlerTestToken, nil
 			})
@@ -345,7 +344,7 @@ func TestRegister_UsesFirstContentTypeValue(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			calls := 0
-			handler := Register(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+			handler := Register(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 				calls++
 				return handlerTestToken, nil
 			})
@@ -383,7 +382,7 @@ func TestRegister_MapsErrorsWithoutToken(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := Register(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+			handler := Register(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 				return auth.IssuedToken{}, tt.err
 			})
 
@@ -414,7 +413,7 @@ func TestLogin_MapsAllOutcomes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := Login(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+			handler := Login(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 				return tt.token, tt.err
 			})
 
@@ -440,7 +439,7 @@ func TestLogin_MapsAllOutcomes(t *testing.T) {
 
 func TestLogin_InvalidRequestDoesNotCallPipeline(t *testing.T) {
 	calls := 0
-	handler := Login(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+	handler := Login(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 		calls++
 		return auth.IssuedToken{}, nil
 	})
@@ -457,7 +456,7 @@ func TestLoginRejectsEscapedNULBeforeRepository(t *testing.T) {
 	require.NoError(t, err)
 
 	response := serve(
-		Login(zap.NewNop(), time.Now, service.Login),
+		Login(zap.NewNop(), service.Login),
 		"application/json",
 		`{"login":"user\u0000suffix","password":"password"}`,
 	)
@@ -486,7 +485,7 @@ func (*countingTokenIssuer) Issue(int64) (auth.IssuedToken, error) {
 }
 
 func TestErrorBodiesCarryOnlyMessage(t *testing.T) {
-	handler := Login(zap.NewNop(), time.Now, func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
+	handler := Login(zap.NewNop(), func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 		return auth.IssuedToken{}, auth.ErrInvalidCredentials
 	})
 	response := serve(

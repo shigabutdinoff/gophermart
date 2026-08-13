@@ -10,20 +10,30 @@ import (
 	schema "github.com/shigabutdinoff/gophermart/migrations"
 )
 
-// migrationsDir указывает корень встроенной файловой системы миграций
-const migrationsDir = "."
-
 // Migrate приводит схему к актуальной версии.
 func Migrate(ctx context.Context, db *sql.DB) error {
-	goose.SetBaseFS(schema.FS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("postgres"); err != nil {
-		return fmt.Errorf("set migrations dialect: %w", err)
+	provider, err := newMigrationProvider(db)
+	if err != nil {
+		return err
 	}
 
-	if err := goose.UpContext(ctx, db, migrationsDir); err != nil {
+	if _, err := provider.Up(ctx); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 
 	return nil
+}
+
+func newMigrationProvider(db *sql.DB) (*goose.Provider, error) {
+	provider, err := goose.NewProvider(
+		goose.DialectPostgres,
+		db,
+		schema.FS,
+		goose.WithLogger(goose.NopLogger()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create migrations provider: %w", err)
+	}
+
+	return provider, nil
 }

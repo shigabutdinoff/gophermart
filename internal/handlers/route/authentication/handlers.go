@@ -14,7 +14,7 @@ import (
 type CredentialsFunc func(context.Context, auth.Credentials) (auth.IssuedToken, error)
 
 // Register returns the public user-registration HTTP handler.
-func Register(logger *zap.Logger, now auth.Clock, register CredentialsFunc) http.HandlerFunc {
+func Register(logger *zap.Logger, register CredentialsFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		credentials, apiErr := decodeCredentials(r, auth.NormalizeRegisterCredentials)
 		if apiErr != nil {
@@ -24,7 +24,7 @@ func Register(logger *zap.Logger, now auth.Clock, register CredentialsFunc) http
 		token, err := register(r.Context(), credentials)
 		switch {
 		case err == nil:
-			writeAuthenticated(w, r, now, token, MessageRegistered)
+			writeAuthenticated(w, r, token, MessageRegistered)
 		case errors.Is(err, auth.ErrLoginTaken):
 			writeMessage(w, r, http.StatusConflict, MessageLoginTaken)
 		default:
@@ -35,7 +35,7 @@ func Register(logger *zap.Logger, now auth.Clock, register CredentialsFunc) http
 }
 
 // Login returns the public user-login HTTP handler.
-func Login(logger *zap.Logger, now auth.Clock, login CredentialsFunc) http.HandlerFunc {
+func Login(logger *zap.Logger, login CredentialsFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		credentials, apiErr := decodeCredentials(r, auth.NormalizeLoginCredentials)
 		if apiErr != nil {
@@ -45,7 +45,7 @@ func Login(logger *zap.Logger, now auth.Clock, login CredentialsFunc) http.Handl
 		token, err := login(r.Context(), credentials)
 		switch {
 		case err == nil:
-			writeAuthenticated(w, r, now, token, MessageLoggedIn)
+			writeAuthenticated(w, r, token, MessageLoggedIn)
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			writeMessage(w, r, http.StatusUnauthorized, MessageInvalidCredentials)
 		default:
