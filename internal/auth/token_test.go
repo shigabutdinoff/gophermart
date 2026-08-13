@@ -1,16 +1,16 @@
 package auth
 
 import (
-	"errors"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/go-chi/jwtauth/v5"
-	"github.com/lestrrat-go/jwx/v3/jwa"
-	"github.com/lestrrat-go/jwx/v3/jws"
-	"github.com/lestrrat-go/jwx/v3/jwt"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/golang-jwt/jwt/v5/request"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,21 +30,21 @@ func TestJWTManagerIssueAndVerify(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(42), userID)
 
-	message, err := jws.Parse([]byte(issued.Value))
+	parsed, _, err := jwt.NewParser().ParseUnverified(issued.Value, jwt.MapClaims{})
 	require.NoError(t, err)
-	require.Len(t, message.Signatures(), 1)
-	algorithm, ok := message.Signatures()[0].ProtectedHeaders().Algorithm()
-	require.True(t, ok)
-	assert.Equal(t, jwa.HS256(), algorithm)
+	assert.Equal(t, jwt.SigningMethodHS256.Alg(), parsed.Method.Alg())
 
-	token, err := jwt.Parse([]byte(issued.Value), jwt.WithVerify(false), jwt.WithValidate(false))
+	claims := jwt.MapClaims{}
+	_, _, err = jwt.NewParser().ParseUnverified(issued.Value, claims)
 	require.NoError(t, err)
-	issuedAt, ok := token.IssuedAt()
-	require.True(t, ok)
-	assert.WithinDuration(t, jwtTestNow, issuedAt, 0)
-	expiration, ok := token.Expiration()
-	require.True(t, ok)
-	assert.WithinDuration(t, jwtTestNow.Add(time.Hour), expiration, 0)
+	issuedAt, err := claims.GetIssuedAt()
+	require.NoError(t, err)
+	require.NotNil(t, issuedAt)
+	assert.WithinDuration(t, jwtTestNow, issuedAt.Time, 0)
+	expiration, err := claims.GetExpirationTime()
+	require.NoError(t, err)
+	require.NotNil(t, expiration)
+	assert.WithinDuration(t, jwtTestNow.Add(time.Hour), expiration.Time, 0)
 }
 
 func TestJWTManagerIssueRejectsNonPositiveUserID(t *testing.T) {
@@ -96,9 +96,9 @@ func TestJWTManagerAppliesLeewayToIssuedAt(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			token := signJWTTestToken(t, jwtTestSecret(), map[string]any{
-				UserIDClaim:       int64(7),
-				jwt.IssuedAtKey:   jwtTestNow.Add(tt.offset),
-				jwt.ExpirationKey: jwtTestNow.Add(5 * time.Minute),
+				UserIDClaim: int64(7),
+				"iat":       jwtTestNow.Add(tt.offset).Unix(),
+				"exp":       jwtTestNow.Add(5 * time.Minute).Unix(),
 			})
 
 			_, err := verifyJWTTestToken(manager, token)
@@ -124,9 +124,9 @@ func TestJWTManagerAppliesLeewayToExpiration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			token := signJWTTestToken(t, jwtTestSecret(), map[string]any{
-				UserIDClaim:       int64(7),
-				jwt.IssuedAtKey:   jwtTestNow.Add(-time.Hour),
-				jwt.ExpirationKey: jwtTestNow.Add(tt.offset),
+				UserIDClaim: int64(7),
+				"iat":       jwtTestNow.Add(-time.Hour).Unix(),
+				"exp":       jwtTestNow.Add(tt.offset).Unix(),
 			})
 
 			_, err := verifyJWTTestToken(manager, token)
@@ -142,9 +142,9 @@ func TestJWTManagerAppliesLeewayToExpiration(t *testing.T) {
 func TestJWTManagerDoesNotRequireIssuedTTL(t *testing.T) {
 	manager := newJWTTestManager(t, jwtTestSecret())
 	token := signJWTTestToken(t, jwtTestSecret(), map[string]any{
-		UserIDClaim:       int64(7),
-		jwt.IssuedAtKey:   jwtTestNow.Add(-2 * time.Hour),
-		jwt.ExpirationKey: jwtTestNow.Add(30 * time.Second),
+		UserIDClaim: int64(7),
+		"iat":       jwtTestNow.Add(-2 * time.Hour).Unix(),
+		"exp":       jwtTestNow.Add(30 * time.Second).Unix(),
 	})
 
 	userID, err := verifyJWTTestToken(manager, token)
@@ -157,8 +157,8 @@ func TestJWTManagerRequiresIssuedAtAndExpiration(t *testing.T) {
 		name    string
 		omitted string
 	}{
-		{"missing iat", jwt.IssuedAtKey},
-		{"missing exp", jwt.ExpirationKey},
+		{"missing iat", "iat"},
+		{"missing exp", "exp"},
 	}
 	manager := newJWTTestManager(t, jwtTestSecret())
 	for _, tt := range tests {
@@ -173,7 +173,7 @@ func TestJWTManagerRequiresIssuedAtAndExpiration(t *testing.T) {
 	}
 }
 
-func TestUserIDFromTokenRejectsInvalidUserID(t *testing.T) {
+func TestJWTManagerParseRequestRejectsInvalidUserID(t *testing.T) {
 	tests := []struct {
 		name    string
 		value   any
@@ -183,6 +183,7 @@ func TestUserIDFromTokenRejectsInvalidUserID(t *testing.T) {
 		{name: "zero", value: int64(0)},
 		{name: "negative", value: int64(-7)},
 		{name: "fractional", value: 7.5},
+		{name: "exponent", value: json.Number("7e0")},
 		{name: "string", value: "7"},
 	}
 
@@ -198,7 +199,7 @@ func TestUserIDFromTokenRejectsInvalidUserID(t *testing.T) {
 			token := signJWTTestToken(t, jwtTestSecret(), claims)
 
 			_, err := verifyJWTTestToken(manager, token)
-			require.ErrorIs(t, err, errInvalidUserIDClaim)
+			require.Error(t, err)
 		})
 	}
 }
@@ -214,27 +215,17 @@ func TestJWTManagerRejectsWrongSignature(t *testing.T) {
 
 func TestJWTManagerRejectsNonHS256Algorithm(t *testing.T) {
 	manager := newJWTTestManager(t, jwtTestSecret())
-	token := signJWTTestTokenWith(t, jwa.HS384(), jwtTestSecret(), validJWTTestClaims())
+	token := signJWTTestTokenWith(t, jwt.SigningMethodHS384, jwtTestSecret(), validJWTTestClaims())
 
 	_, err := verifyJWTTestToken(manager, token)
 	require.Error(t, err)
 }
 
-var errInvalidUserIDClaim = errors.New("invalid user_id claim")
-
-// verifyJWTTestToken повторяет путь мидлвари с чтением user_id
 func verifyJWTTestToken(manager *JWTManager, token string) (int64, error) {
-	verified, err := jwtauth.VerifyToken(manager.Auth(), token)
-	if err != nil {
-		return 0, err
-	}
+	r := httptest.NewRequest(http.MethodGet, "/protected", http.NoBody)
+	r.Header.Set("Authorization", "Bearer "+token)
 
-	userID, ok := UserIDFromToken(verified)
-	if !ok {
-		return 0, errInvalidUserIDClaim
-	}
-
-	return userID, nil
+	return manager.ParseRequest(r, request.BearerExtractor{})
 }
 
 func newJWTTestManager(t *testing.T, secret []byte) *JWTManager {
@@ -256,35 +247,29 @@ func jwtTestSecret() []byte {
 
 func validJWTTestClaims() map[string]any {
 	return map[string]any{
-		UserIDClaim:       int64(7),
-		jwt.IssuedAtKey:   jwtTestNow,
-		jwt.ExpirationKey: jwtTestNow.Add(5 * time.Minute),
+		UserIDClaim: int64(7),
+		"iat":       jwtTestNow.Unix(),
+		"exp":       jwtTestNow.Add(5 * time.Minute).Unix(),
 	}
 }
 
 func signJWTTestToken(t *testing.T, secret []byte, claims map[string]any) string {
 	t.Helper()
 
-	return signJWTTestTokenWith(t, jwa.HS256(), secret, claims)
+	return signJWTTestTokenWith(t, jwt.SigningMethodHS256, secret, claims)
 }
 
 func signJWTTestTokenWith(
 	t *testing.T,
-	algorithm jwa.SignatureAlgorithm,
+	algorithm jwt.SigningMethod,
 	secret []byte,
 	claims map[string]any,
 ) string {
 	t.Helper()
 
-	builder := jwt.NewBuilder()
-	for name, value := range claims {
-		builder = builder.Claim(name, value)
-	}
-	token, err := builder.Build()
+	token := jwt.NewWithClaims(algorithm, jwt.MapClaims(claims))
+	signed, err := token.SignedString(secret)
 	require.NoError(t, err)
 
-	signed, err := jwt.Sign(token, jwt.WithKey(algorithm, secret))
-	require.NoError(t, err)
-
-	return string(signed)
+	return signed
 }

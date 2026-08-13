@@ -73,7 +73,7 @@ func newServer(
 		sqlDB:           sqlDB,
 		register:        authentication.Register(logger, now, registration.Register),
 		login:           authentication.Login(logger, now, login.Login),
-		authorize:       authorization.Middleware(tokens.Auth()),
+		authorize:       authorization.Middleware(tokens.ParseRequest),
 		Config:          cfg,
 	}
 	server.setupRoutes()

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v3/jwa"
-	"github.com/lestrrat-go/jwx/v3/jwt"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/golang-jwt/jwt/v5/request"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -42,7 +42,7 @@ func serveAuthorized(t *testing.T, configure func(*http.Request)) middlewareResu
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	Middleware(testManager(t).Auth())(next).ServeHTTP(response, r)
+	Middleware(testManager(t).ParseRequest)(next).ServeHTTP(response, r)
 
 	return result
 }
@@ -255,9 +255,9 @@ func TestMiddleware_RejectsMissingInvalidOrNonpositiveCredentials(t *testing.T) 
 			name: "expired token",
 			configure: func(r *http.Request) {
 				r.Header.Set("Authorization", "Bearer "+signedToken(map[string]any{
-					auth.UserIDClaim:  int64(7),
-					jwt.IssuedAtKey:   middlewareTestNow.Add(-2 * time.Hour),
-					jwt.ExpirationKey: middlewareTestNow.Add(-time.Hour),
+					auth.UserIDClaim: int64(7),
+					"iat":            middlewareTestNow.Add(-2 * time.Hour).Unix(),
+					"exp":            middlewareTestNow.Add(-time.Hour).Unix(),
 				}))
 			},
 		},
@@ -280,8 +280,8 @@ func TestMiddleware_RejectsMissingInvalidOrNonpositiveCredentials(t *testing.T) 
 			name: "missing user id",
 			configure: func(r *http.Request) {
 				r.Header.Set("Authorization", "Bearer "+signedToken(map[string]any{
-					jwt.IssuedAtKey:   middlewareTestNow,
-					jwt.ExpirationKey: middlewareTestNow.Add(time.Hour),
+					"iat": middlewareTestNow.Unix(),
+					"exp": middlewareTestNow.Add(time.Hour).Unix(),
 				}))
 			},
 		},
@@ -317,6 +317,29 @@ func TestMiddleware_StoresUserIDWithoutTouchingOriginalRequest(t *testing.T) {
 	assert.Equal(t, 1, result.nextCalls)
 	assert.Equal(t, int64(7), result.contextUserID)
 	assert.True(t, result.contextHasID)
+}
+
+func TestMiddleware_CallsParserOnceWithOrderedExtractor(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/protected", http.NoBody)
+	r.Header.Set("Authorization", "Bearer selected")
+	r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "fallback"})
+	w := httptest.NewRecorder()
+	parserCalls := 0
+	selected := ""
+	parser := func(r *http.Request, extractor request.Extractor) (int64, error) {
+		parserCalls++
+		var err error
+		selected, err = extractor.ExtractToken(r)
+		return 7, err
+	}
+	nextCalls := 0
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { nextCalls++ })
+
+	Middleware(parser)(next).ServeHTTP(w, r)
+
+	assert.Equal(t, 1, parserCalls)
+	assert.Equal(t, "selected", selected)
+	assert.Equal(t, 1, nextCalls)
 }
 
 func TestMiddleware_MalformedOrUnrelatedCookiesDoNotDisturbSelectedBearer(t *testing.T) {
@@ -396,9 +419,9 @@ func issuedToken(t *testing.T, userID int64) string {
 
 func validClaims(userID int64) map[string]any {
 	return map[string]any{
-		auth.UserIDClaim:  userID,
-		jwt.IssuedAtKey:   middlewareTestNow,
-		jwt.ExpirationKey: middlewareTestNow.Add(time.Hour),
+		auth.UserIDClaim: userID,
+		"iat":            middlewareTestNow.Unix(),
+		"exp":            middlewareTestNow.Add(time.Hour).Unix(),
 	}
 }
 
@@ -407,19 +430,11 @@ func signedToken(claims map[string]any) string {
 }
 
 func signedTokenWith(secret []byte, claims map[string]any) string {
-	builder := jwt.NewBuilder()
-	for name, value := range claims {
-		builder = builder.Claim(name, value)
-	}
-	token, err := builder.Build()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims(claims))
+	signed, err := token.SignedString(secret)
 	if err != nil {
 		panic(err)
 	}
 
-	signed, err := jwt.Sign(token, jwt.WithKey(jwa.HS256(), secret))
-	if err != nil {
-		panic(err)
-	}
-
-	return string(signed)
+	return signed
 }

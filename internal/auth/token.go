@@ -3,23 +3,30 @@ package auth
 import (
 	"bytes"
 	"fmt"
+	"net/http"
 	"time"
 
-	"github.com/go-chi/jwtauth/v5"
-	"github.com/lestrrat-go/jwx/v3/jwt"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/golang-jwt/jwt/v5/request"
 )
 
 const (
-	// TokenTTL is the validity period of newly issued tokens.
 	TokenTTL = time.Hour
-	// UserIDClaim carries the authenticated user ID.
+	// допуск на расхождение часов при проверке токена
+	TokenLeeway = time.Minute
 	UserIDClaim = "user_id"
 )
 
+type jwtClaims struct {
+	UserID int64 `json:"user_id"`
+	jwt.RegisteredClaims
+}
+
 // JWTManager выпускает и проверяет токены HS256.
 type JWTManager struct {
-	auth *jwtauth.JWTAuth
-	now  Clock
+	secret []byte
+	parser *jwt.Parser
+	now    Clock
 }
 
 // NewJWTManager забирает копию ключа, чужие правки на неё не влияют.
@@ -32,22 +39,16 @@ func NewJWTManager(secret []byte, now Clock) (*JWTManager, error) {
 	}
 
 	return &JWTManager{
-		auth: jwtauth.New(
-			"HS256",
-			bytes.Clone(secret),
-			nil,
-			jwt.WithClock(jwt.ClockFunc(now)),
-			jwt.WithAcceptableSkew(time.Minute),
-			jwt.WithRequiredClaim(jwt.IssuedAtKey),
-			jwt.WithRequiredClaim(jwt.ExpirationKey),
+		secret: bytes.Clone(secret),
+		parser: jwt.NewParser(
+			jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+			jwt.WithExpirationRequired(),
+			jwt.WithIssuedAt(),
+			jwt.WithTimeFunc(now),
+			jwt.WithLeeway(TokenLeeway),
 		),
 		now: now,
 	}, nil
-}
-
-// Auth returns the verifier backing the authorization middleware.
-func (m *JWTManager) Auth() *jwtauth.JWTAuth {
-	return m.auth
 }
 
 func (m *JWTManager) Issue(userID int64) (IssuedToken, error) {
@@ -57,11 +58,14 @@ func (m *JWTManager) Issue(userID int64) (IssuedToken, error) {
 
 	issuedAt := m.now().UTC().Truncate(time.Second)
 	expiresAt := issuedAt.Add(TokenTTL)
-	_, value, err := m.auth.Encode(map[string]any{
-		UserIDClaim:       userID,
-		jwt.IssuedAtKey:   issuedAt.Unix(),
-		jwt.ExpirationKey: expiresAt.Unix(),
-	})
+	claims := jwtClaims{
+		UserID: userID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(issuedAt),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+	}
+	value, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
 	if err != nil {
 		return IssuedToken{}, fmt.Errorf("sign JWT: %w", err)
 	}
@@ -73,25 +77,25 @@ func (m *JWTManager) Issue(userID int64) (IssuedToken, error) {
 	}, nil
 }
 
-// UserIDFromToken returns the positive user ID stored in a verified token.
-func UserIDFromToken(token jwt.Token) (int64, bool) {
-	if token == nil {
-		return 0, false
+// ParseRequest достаёт из запроса ровно один токен и проверяет его.
+func (m *JWTManager) ParseRequest(r *http.Request, extractor request.Extractor) (int64, error) {
+	claims := jwtClaims{}
+	_, err := request.ParseFromRequest(
+		r,
+		extractor,
+		func(*jwt.Token) (any, error) { return m.secret, nil },
+		request.WithClaims(&claims),
+		request.WithParser(m.parser),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("parse JWT: %w", err)
+	}
+	if claims.IssuedAt == nil {
+		return 0, fmt.Errorf("missing iat claim")
+	}
+	if claims.UserID <= 0 {
+		return 0, fmt.Errorf("invalid %s claim", UserIDClaim)
 	}
 
-	// Разобранный claim приходит числом JSON, выпущенный — целым Go.
-	var claim any
-	if err := token.Get(UserIDClaim, &claim); err != nil {
-		return 0, false
-	}
-
-	switch value := claim.(type) {
-	case int64:
-		return value, value > 0
-	case float64:
-		userID := int64(value)
-		return userID, float64(userID) == value && userID > 0
-	default:
-		return 0, false
-	}
+	return claims.UserID, nil
 }
