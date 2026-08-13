@@ -2,38 +2,43 @@ package gophermart
 
 import (
 	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"os"
 
+	"github.com/alexflint/go-arg"
 	"github.com/caarlos0/env/v11"
 )
 
+// ErrHelp сообщает, что запрошена справка и описание флагов уже напечатано.
+var ErrHelp = arg.ErrHelp
+
 // Parse читает флаги и окружение, явный флаг важнее переменной окружения.
 func Parse(args []string) (Config, error) {
-	cfg := Default()
-	fs := flag.NewFlagSet("gophermart", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	bindFlags(fs, &cfg)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fs.SetOutput(os.Stderr)
-			fs.Usage()
+	var parsed flags
+	// окружение читает env ниже, иначе пустая переменная затенила бы env-файл
+	parser, err := arg.NewParser(
+		arg.Config{Program: "gophermart", IgnoreEnv: true, Out: os.Stderr},
+		&parsed,
+	)
+	if err != nil {
+		return Config{}, fmt.Errorf("build flag parser: %w", err)
+	}
+	if err := parser.Parse(args); err != nil {
+		if errors.Is(err, arg.ErrHelp) {
+			parser.WriteHelp(os.Stderr)
 		}
 		return Config{}, fmt.Errorf("parse flags: %w", err)
 	}
-	if fs.NArg() != 0 {
-		return Config{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
-	}
-	// Снимок значений флагов до применения окружения
-	flags := cfg
+
+	cfg := Default()
 	if err := env.Parse(&cfg); err != nil {
 		return Config{}, fmt.Errorf("parse environment: %w", err)
 	}
-	overrideWithFlags(fs, &cfg, flags)
+	parsed.apply(&cfg)
+
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
 	}
+
 	return cfg, nil
 }

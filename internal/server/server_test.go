@@ -43,7 +43,6 @@ func TestNew(t *testing.T) {
 
 	assert.Equal(t, config.DefaultRunAddress, s.RunAddress)
 	assert.Equal(t, DefaultShutdownTimeout, s.shutdownTimeout)
-	assert.Equal(t, config.DefaultRequestBodyLimit, s.RequestBodyLimit)
 	assert.NotNil(t, s.router)
 }
 

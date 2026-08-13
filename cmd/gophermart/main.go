@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,7 +19,7 @@ func main() {
 
 	cfg, err := config.Parse(os.Args[1:])
 	// Запрос справки не ошибка, описание флагов уже напечатано
-	if errors.Is(err, flag.ErrHelp) {
+	if errors.Is(err, config.ErrHelp) {
 		return
 	}
 	if err != nil {
