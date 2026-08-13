@@ -12,6 +12,12 @@ func AllowContentType(contentTypes ...string) func(huma.Context, func(huma.Conte
 	return fromRequestMiddleware(middleware.AllowContentType(contentTypes...))
 }
 
+var clientIPFromRemoteAddr = fromRequestMiddleware(middleware.ClientIPFromRemoteAddr)
+
+func ClientIPFromRemoteAddr(ctx huma.Context, next func(huma.Context)) {
+	clientIPFromRemoteAddr(ctx, next)
+}
+
 func fromRequestMiddleware(httpMiddleware func(http.Handler) http.Handler) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		request, writer := humachi.Unwrap(ctx)
