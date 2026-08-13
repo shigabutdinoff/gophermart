@@ -40,20 +40,22 @@ type IssuedToken struct {
 	ExpiresAt time.Time
 }
 
-// UserRepository stores users and looks them up by normalized login.
-type UserRepository interface {
-	// Create persists a user with a password hash.
+type UserCreator interface {
 	Create(ctx context.Context, login, passwordHash string) (User, error)
-	// FindByLogin returns the user with the supplied normalized login.
+}
+
+// UserFinder ищет пользователя по уже нормализованному логину.
+type UserFinder interface {
 	FindByLogin(ctx context.Context, login string) (User, error)
 }
 
-// Passwords hashes cleartext passwords and verifies them against stored hashes.
-type Passwords interface {
-	// Hash returns a secure encoded hash of password.
+type PasswordHasher interface {
 	Hash(password string) (string, error)
-	// Verify returns ErrPasswordMismatch only for a non-matching password.
-	// Malformed hashes are returned as internal errors.
+}
+
+type PasswordVerifier interface {
+	// несовпадение пароля даёт ErrPasswordMismatch,
+	// битый хеш возвращается как внутренняя ошибка
 	Verify(passwordHash, password string) error
 }
 

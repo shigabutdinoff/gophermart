@@ -99,7 +99,7 @@ func TestRegisterConcurrentEquivalentLoginsCreateExactlyOneUser(t *testing.T) {
 func TestRegisterFailuresDoNotPersistUserOrReturnToken(t *testing.T) {
 	tests := []struct {
 		name       string
-		passwords  auth.Passwords
+		passwords  auth.PasswordHasher
 		storageErr error
 		wantCreate int
 	}{

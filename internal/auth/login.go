@@ -10,21 +10,21 @@ import (
 
 // LoginService проверяет учётные данные и выпускает токен.
 type LoginService struct {
-	users     UserRepository
-	passwords Passwords
+	users     UserFinder
+	verifier  PasswordVerifier
 	tokens    TokenIssuer
 }
 
 // NewLoginService constructs a LoginService with its required collaborators.
 func NewLoginService(
 	_ *zap.Logger,
-	users UserRepository,
-	passwords Passwords,
+	users UserFinder,
+	verifier PasswordVerifier,
 	tokens TokenIssuer,
 ) (*LoginService, error) {
 	return &LoginService{
 		users:     users,
-		passwords: passwords,
+		verifier:  verifier,
 		tokens:    tokens,
 	}, nil
 }
@@ -39,7 +39,7 @@ func (s *LoginService) Login(ctx context.Context, credentials Credentials) (Issu
 		return IssuedToken{}, fmt.Errorf("find user: %w", err)
 	}
 
-	if err := s.passwords.Verify(user.PasswordHash, credentials.Password); err != nil {
+	if err := s.verifier.Verify(user.PasswordHash, credentials.Password); err != nil {
 		if errors.Is(err, ErrPasswordMismatch) {
 			return IssuedToken{}, ErrInvalidCredentials
 		}

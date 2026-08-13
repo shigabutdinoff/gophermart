@@ -9,6 +9,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type creatorOnly struct {
+	create func(context.Context, string, string) (User, error)
+}
+
+func (c creatorOnly) Create(ctx context.Context, login, passwordHash string) (User, error) {
+	return c.create(ctx, login, passwordHash)
+}
+
+type hasherOnly struct {
+	hash func(string) (string, error)
+}
+
+func (h hasherOnly) Hash(password string) (string, error) {
+	return h.hash(password)
+}
+
+func TestRegisterServiceUsesNarrowCollaboratorsInHashCreateIssueOrder(t *testing.T) {
+	var calls []string
+	service := NewRegisterService(
+		creatorOnly{create: func(_ context.Context, login, passwordHash string) (User, error) {
+			calls = append(calls, "create")
+			assert.Equal(t, "user", login)
+			assert.Equal(t, "hash", passwordHash)
+			return User{ID: 7}, nil
+		}},
+		hasherOnly{hash: func(password string) (string, error) {
+			calls = append(calls, "hash")
+			assert.Equal(t, "password", password)
+			return "hash", nil
+		}},
+		&fakeTokenIssuer{issueFunc: func(userID int64) (IssuedToken, error) {
+			calls = append(calls, "issue")
+			assert.Equal(t, int64(7), userID)
+			return IssuedToken{Value: "token"}, nil
+		}},
+	)
+
+	token, err := service.Register(
+		context.Background(),
+		Credentials{Login: "user", Password: "password"},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "token", token.Value)
+	assert.Equal(t, []string{"hash", "create", "issue"}, calls)
+}
+
 func TestRegisterServiceHashesEachPasswordBeforeCreatingUser(t *testing.T) {
 	ctx := context.Background()
 	var hashes []string
@@ -39,7 +86,7 @@ func TestRegisterServiceHashesEachPasswordBeforeCreatingUser(t *testing.T) {
 
 	assert.Equal(t, 2, users.createCalls)
 	assert.Equal(t, 2, issuer.calls)
-	assert.Equal(t, 2, users.findCalls)
+	assert.Zero(t, users.findCalls)
 	for i, userID := range issuedUserIDs {
 		assert.Equal(t, int64(i+1), userID)
 	}
@@ -73,42 +120,7 @@ func TestRegisterServiceStopsBeforeIssueWhenLoginTaken(t *testing.T) {
 	assert.Equal(t, 1, passwords.hashCalls)
 	assert.Equal(t, 1, users.createCalls)
 	assert.Zero(t, issuer.calls)
-	assert.Equal(t, 1, users.findCalls)
-}
-
-func TestRegisterServiceSkipsHashingWhenLoginAlreadyExists(t *testing.T) {
-	users := &fakeUserRepository{
-		findFunc: func(context.Context, string) (User, error) { return User{ID: 7}, nil },
-	}
-	passwords := &fakePasswords{}
-	issuer := &fakeTokenIssuer{}
-	service := NewRegisterService(users, passwords, issuer)
-
-	token, err := service.Register(context.Background(), Credentials{Login: "user", Password: "password"})
-	require.ErrorIs(t, err, ErrLoginTaken)
-	assert.Zero(t, token)
-	assert.Equal(t, 1, users.findCalls)
-	assert.Zero(t, passwords.hashCalls)
-	assert.Zero(t, users.createCalls)
-	assert.Zero(t, issuer.calls)
-}
-
-func TestRegisterServiceDoesNotHashWhenLookupFails(t *testing.T) {
-	lookupErr := errors.New("repository unavailable")
-	users := &fakeUserRepository{
-		findFunc: func(context.Context, string) (User, error) { return User{}, lookupErr },
-	}
-	passwords := &fakePasswords{}
-	issuer := &fakeTokenIssuer{}
-	service := NewRegisterService(users, passwords, issuer)
-
-	token, err := service.Register(context.Background(), Credentials{Login: "user", Password: "password"})
-	require.ErrorIs(t, err, lookupErr)
-	assert.NotErrorIs(t, err, ErrLoginTaken)
-	assert.Zero(t, token)
-	assert.Zero(t, passwords.hashCalls)
-	assert.Zero(t, users.createCalls)
-	assert.Zero(t, issuer.calls)
+	assert.Zero(t, users.findCalls)
 }
 
 func TestRegisterServiceDoesNotCreateOrIssueWhenHashFails(t *testing.T) {
@@ -123,7 +135,7 @@ func TestRegisterServiceDoesNotCreateOrIssueWhenHashFails(t *testing.T) {
 	assert.Zero(t, token)
 	assert.Zero(t, users.createCalls)
 	assert.Zero(t, issuer.calls)
-	assert.Equal(t, 1, users.findCalls)
+	assert.Zero(t, users.findCalls)
 }
 
 func TestRegisterServiceDoesNotIssueWhenCreateFails(t *testing.T) {
@@ -140,7 +152,7 @@ func TestRegisterServiceDoesNotIssueWhenCreateFails(t *testing.T) {
 	assert.Zero(t, token)
 	assert.Equal(t, 1, users.createCalls)
 	assert.Zero(t, issuer.calls)
-	assert.Equal(t, 1, users.findCalls)
+	assert.Zero(t, users.findCalls)
 }
 
 func TestRegisterServiceKeepsCreatedUserWhenIssueFails(t *testing.T) {
@@ -168,5 +180,5 @@ func TestRegisterServiceKeepsCreatedUserWhenIssueFails(t *testing.T) {
 	require.True(t, created)
 	assert.Equal(t, 2, users.createCalls)
 	assert.Equal(t, 1, issuer.calls)
-	assert.Equal(t, 2, users.findCalls)
+	assert.Zero(t, users.findCalls)
 }
