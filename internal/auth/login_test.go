@@ -15,12 +15,14 @@ import (
 	authmocks "github.com/shigabutdinoff/gophermart/internal/auth/mocks"
 )
 
+const testDummyHash = "dummy-hash"
+
 // loginCollaborators держит три узких зависимости входа. Незаявленный вызов
 // мока валит тест сам, поэтому «не звали» отдельной проверки не требует.
 type loginCollaborators struct {
 	t         *testing.T
 	users     *authmocks.MockUserFinder
-	passwords *authmocks.MockLoginPasswords
+	passwords *authmocks.MockPasswordVerifier
 	issuer    *authmocks.MockTokenIssuer
 }
 
@@ -30,7 +32,7 @@ func newLoginCollaborators(t *testing.T) loginCollaborators {
 	return loginCollaborators{
 		t:         t,
 		users:     authmocks.NewMockUserFinder(t),
-		passwords: authmocks.NewMockLoginPasswords(t),
+		passwords: authmocks.NewMockPasswordVerifier(t),
 		issuer:    authmocks.NewMockTokenIssuer(t),
 	}
 }
@@ -39,11 +41,21 @@ func (c loginCollaborators) service() *auth.LoginService {
 	return c.serviceWithLimiter(nil)
 }
 
-// serviceWithLimiter собирает вход, попутно объявляя хеш-пустышку.
+// serviceWithLimiter собирает вход поверх заданного ограничителя попыток.
 func (c loginCollaborators) serviceWithLimiter(limiter *auth.LoginLimiter) *auth.LoginService {
 	c.t.Helper()
-	c.passwords.EXPECT().Hash(mock.Anything).Return("dummy-hash", nil).Once()
-	service, err := auth.NewLoginService(zap.NewNop(), c.users, c.passwords, c.issuer, limiter)
+
+	if limiter == nil {
+		limiter = auth.NewLoginLimiter()
+	}
+	service, err := auth.NewLoginService(auth.LoginDeps{
+		Logger:    zap.NewNop(),
+		Users:     c.users,
+		Verifier:  c.passwords,
+		Tokens:    c.issuer,
+		Limiter:   limiter,
+		DummyHash: testDummyHash,
+	})
 	require.NoError(c.t, err)
 
 	return service
@@ -140,7 +152,7 @@ func expectFindAndVerify(c loginCollaborators, findErr, verifyErr error) {
 		Return(auth.User{ID: 7, PasswordHash: "stored-hash"}, findErr).Once()
 	switch {
 	case errors.Is(findErr, auth.ErrUserNotFound):
-		c.passwords.EXPECT().Verify("dummy-hash", "password").
+		c.passwords.EXPECT().Verify(testDummyHash, "password").
 			Return(auth.ErrPasswordMismatch).Once()
 	case findErr != nil:
 	default:

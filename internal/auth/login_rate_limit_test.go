@@ -48,7 +48,7 @@ func TestLoginServiceInvalidCredentialsHitOnlyTheirExactKey(t *testing.T) {
 	collaborators := newLoginCollaborators(t)
 	collaborators.users.EXPECT().FindByLogin(mock.Anything, "user").
 		Return(auth.User{}, auth.ErrUserNotFound).Once()
-	collaborators.passwords.EXPECT().Verify("dummy-hash", "password").
+	collaborators.passwords.EXPECT().Verify(testDummyHash, "password").
 		Return(auth.ErrPasswordMismatch).Once()
 	limiter := auth.NewLoginLimiter()
 

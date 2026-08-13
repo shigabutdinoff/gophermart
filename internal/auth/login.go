@@ -20,36 +20,44 @@ type LoginService struct {
 	dummyHash string
 }
 
-type loginPasswords interface {
-	PasswordHasher
-	PasswordVerifier
+type LoginDeps struct {
+	Logger    *zap.Logger
+	Users     UserFinder
+	Verifier  PasswordVerifier
+	Tokens    TokenIssuer
+	Limiter   *LoginLimiter
+	DummyHash string
 }
 
-// NewLoginService собирает службу входа из её обязательных участников.
-// Без своего ограничителя служба берёт умолчания NewLoginLimiter.
-func NewLoginService(
-	logger *zap.Logger,
-	users UserFinder,
-	passwords loginPasswords,
-	tokens TokenIssuer,
-	limiters ...*LoginLimiter,
-) (*LoginService, error) {
-	dummyHash, err := passwords.Hash(dummyPassword)
-	if err != nil {
-		return nil, fmt.Errorf("hash dummy password: %w", err)
+// NewLoginService собирает службу входа из готовых зависимостей.
+func NewLoginService(deps LoginDeps) (*LoginService, error) {
+	if deps.Limiter == nil {
+		return nil, errors.New("login limiter must not be nil")
 	}
-	if logger == nil {
-		logger = zap.NewNop()
+	if deps.DummyHash == "" {
+		return nil, errors.New("dummy password hash must not be empty")
 	}
-	limiter := NewLoginLimiter()
-	if len(limiters) != 0 && limiters[0] != nil {
-		limiter = limiters[0]
+	if deps.Logger == nil {
+		deps.Logger = zap.NewNop()
 	}
 
 	return &LoginService{
-		logger: logger, users: users, verifier: passwords, tokens: tokens,
-		limiter: limiter, dummyHash: dummyHash,
+		logger: deps.Logger, users: deps.Users, verifier: deps.Verifier, tokens: deps.Tokens,
+		limiter: deps.Limiter, dummyHash: deps.DummyHash,
 	}, nil
+}
+
+// NewLoginDummyHash считает хеш пароля несуществующего пользователя.
+func NewLoginDummyHash(hasher PasswordHasher) (string, error) {
+	dummyHash, err := hasher.Hash(dummyPassword)
+	if err != nil {
+		return "", fmt.Errorf("hash dummy password: %w", err)
+	}
+	if dummyHash == "" {
+		return "", errors.New("dummy password hash must not be empty")
+	}
+
+	return dummyHash, nil
 }
 
 // Login проверяет учётные данные и выпускает новый токен.

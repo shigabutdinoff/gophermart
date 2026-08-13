@@ -171,7 +171,14 @@ func buildAuthDeps(
 	users := userrepository.New(session)
 	passwords := auth.Argon2Passwords{}
 	registration := auth.NewRegisterService(users, passwords, tokens)
-	login, err := auth.NewLoginService(logger, users, passwords, tokens)
+	dummyHash, err := auth.NewLoginDummyHash(passwords)
+	if err != nil {
+		return authentication.Deps{}, err
+	}
+	login, err := auth.NewLoginService(auth.LoginDeps{
+		Logger: logger, Users: users, Verifier: passwords, Tokens: tokens,
+		Limiter: auth.NewLoginLimiter(), DummyHash: dummyHash,
+	})
 	if err != nil {
 		return authentication.Deps{}, err
 	}
