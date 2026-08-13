@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// LivePath отвечает, что процесс жив, не трогая хранилище.
+const LivePath = "/live"
+
 // PingTimeout ограничивает время проверки соединения с БД.
 const PingTimeout = time.Second
 

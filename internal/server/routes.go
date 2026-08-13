@@ -2,6 +2,7 @@ package server
 
 import (
 	"compress/gzip"
+	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
@@ -28,13 +29,14 @@ func (s *Server) setupRoutes() {
 }
 
 func (s *Server) registerHealthcheck(router *chi.Mux) {
+	router.Get(healthcheck.LivePath, func(http.ResponseWriter, *http.Request) {})
 	router.Get("/ping", healthcheck.Ping(s.pinger))
 }
 
 func (s *Server) installMiddleware(router *chi.Mux) {
 	router.Use(logging.WithLogging(s.logger))
 	router.Use(middleware.GetHead)
-	router.Use(middleware.Heartbeat("/live"))
+	router.Use(middleware.Heartbeat(healthcheck.LivePath))
 	router.Use(middleware.Compress(gzip.DefaultCompression))
 	router.Use(middleware.AllowContentEncoding(decompress.Encodings...))
 	router.Use(decompress.Gzip)
