@@ -14,7 +14,7 @@ import (
 )
 
 func TestLogin_UnknownLoginAndWrongPasswordShareBody(t *testing.T) {
-	deps := loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials)
+	deps := loginReturning(auth.LoginResult{}, auth.ErrInvalidCredentials, nil)
 	handler := newRouter(zap.NewNop(), deps, testBodyLimit)
 
 	bodies := make([]string, 0, 2)
@@ -32,19 +32,19 @@ func TestLogin_UnknownLoginAndWrongPasswordShareBody(t *testing.T) {
 func TestLogin_MapsAllOutcomes(t *testing.T) {
 	tests := []struct {
 		name    string
-		token   auth.IssuedToken
+		result  auth.LoginResult
 		err     error
 		status  int
 		message string
 	}{
-		{"success", handlerTestToken, nil, http.StatusOK, ""},
-		{"invalid", auth.IssuedToken{}, auth.ErrInvalidCredentials, http.StatusUnauthorized, MessageInvalidCredentials},
-		{"internal", auth.IssuedToken{}, errors.New("storage"), http.StatusInternalServerError, message.Internal},
+		{"success", auth.LoginResult{Token: handlerTestToken}, nil, http.StatusOK, ""},
+		{"invalid", auth.LoginResult{}, auth.ErrInvalidCredentials, http.StatusUnauthorized, MessageInvalidCredentials},
+		{"internal", auth.LoginResult{}, errors.New("storage"), http.StatusInternalServerError, message.Internal},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := serveLogin(
-				loginReturning(tt.token, tt.err),
+				loginReturning(tt.result, tt.err, nil),
 				"application/json",
 				`{"login":"user","password":"password"}`,
 			)

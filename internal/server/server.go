@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net"
@@ -165,7 +166,12 @@ func buildAuthDeps(session database.Session, tokens *auth.JWTManager) authentica
 	registration := auth.NewRegisterService(users, passwords, tokens)
 	login := auth.NewLoginService(users, passwords, tokens)
 
-	return authentication.Deps{Register: registration.Register, Login: login.Login}
+	return authentication.Deps{
+		Register: registration.Register,
+		Login: func(ctx context.Context, credentials auth.Credentials, client string) (auth.LoginResult, error) {
+			return login.Login(ctx, credentials, client)
+		},
+	}
 }
 
 func buildOrderDeps(storedOrders *orderrepository.Repository) ordersroute.Deps {

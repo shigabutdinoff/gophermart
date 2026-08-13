@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
@@ -30,9 +31,11 @@ const (
 // CredentialsFunc заводит учётную запись по нормализованным данным.
 type CredentialsFunc func(context.Context, auth.Credentials) (auth.IssuedToken, error)
 
+type LoginFunc func(context.Context, auth.Credentials, string) (auth.LoginResult, error)
+
 type Deps struct {
 	Register CredentialsFunc
-	Login    CredentialsFunc
+	Login    LoginFunc
 }
 
 type Options = route.Options
@@ -88,7 +91,7 @@ func registerRegistrationRoute(api huma.API, logger *zap.Logger, register Creden
 	})
 }
 
-func registerLoginRoute(api huma.API, logger *zap.Logger, login CredentialsFunc, options Options) {
+func registerLoginRoute(api huma.API, logger *zap.Logger, login LoginFunc, options Options) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "login-user",
 		Method:        http.MethodPost,
@@ -106,10 +109,10 @@ func registerLoginRoute(api huma.API, logger *zap.Logger, login CredentialsFunc,
 		},
 	}, func(ctx context.Context, in *loginInput) (*authOutput, error) {
 		credentials := auth.NormalizeCredentials(in.Body.Login, in.Body.Password)
-		token, err := login(ctx, credentials)
+		result, err := login(ctx, credentials, middleware.GetClientIPAddr(ctx).String())
 		switch {
 		case err == nil:
-			return authenticated(token), nil
+			return authenticated(result.Token), nil
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			return nil, huma.Error401Unauthorized(MessageInvalidCredentials)
 		default:

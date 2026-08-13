@@ -17,6 +17,8 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	// ErrPasswordMismatch означает, что пароль не подходит к сохранённому хешу.
 	ErrPasswordMismatch = errors.New("password mismatch")
+	// ErrRateLimited означает превышение числа попыток входа.
+	ErrRateLimited = errors.New("login attempts limit exceeded")
 )
 
 // Credentials хранит логин и пароль в открытом виде.
@@ -36,6 +38,12 @@ type IssuedToken struct {
 	Value     string
 	IssuedAt  time.Time
 	ExpiresAt time.Time
+}
+
+// В LoginResult заполнен либо токен, либо Retry-After отказа.
+type LoginResult struct {
+	Token      IssuedToken
+	RetryAfter int
 }
 
 type UserCreator interface {

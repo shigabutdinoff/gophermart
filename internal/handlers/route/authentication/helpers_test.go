@@ -74,10 +74,13 @@ func registerReturning(token auth.IssuedToken, err error, calls *int) Deps {
 }
 
 // loginReturning делает то же для входа.
-func loginReturning(token auth.IssuedToken, err error) Deps {
+func loginReturning(result auth.LoginResult, err error, calls *int) Deps {
 	return Deps{
-		Login: func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
-			return token, err
+		Login: func(context.Context, auth.Credentials, string) (auth.LoginResult, error) {
+			if calls != nil {
+				*calls++
+			}
+			return result, err
 		},
 	}
 }

@@ -53,7 +53,7 @@ func TestLoginServiceLoginIssuesTokenForNormalizedLogin(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.Equal(t, "exact-token", got.Value)
+	assert.Equal(t, "exact-token", got.Token.Value)
 }
 
 func TestLoginServiceLoginRejectsUnknownUserAndWrongPasswordIdentically(t *testing.T) {

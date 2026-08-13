@@ -34,7 +34,7 @@ func TestHandlersLogInternalErrors(t *testing.T) {
 		{
 			name: "login",
 			run: func(logger *zap.Logger, err error) *httptest.ResponseRecorder {
-				deps := loginReturning(auth.IssuedToken{}, err)
+				deps := loginReturning(auth.LoginResult{}, err, nil)
 				return serve(newRouter(logger, deps, testBodyLimit),
 					loginPath, "application/json",
 					`{"login":"user","password":"password"}`)
@@ -66,7 +66,7 @@ func TestHandlersDoNotLogClientErrors(t *testing.T) {
 		registerPath, "application/json", `{"login":"user","password":"password"}`,
 	)
 	serve(
-		newRouter(logger, loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials), testBodyLimit),
+		newRouter(logger, loginReturning(auth.LoginResult{}, auth.ErrInvalidCredentials, nil), testBodyLimit),
 		loginPath, "application/json", `{"login":"user","password":"password"}`,
 	)
 
@@ -97,8 +97,8 @@ func TestRoutes_StatusesStayWithinSpecification(t *testing.T) {
 				Register: func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 					return handlerTestToken, nil
 				},
-				Login: func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
-					return handlerTestToken, nil
+				Login: func(context.Context, auth.Credentials, string) (auth.LoginResult, error) {
+					return auth.LoginResult{Token: handlerTestToken}, nil
 				},
 			}
 			response := serve(newRouter(zap.NewNop(), deps, testBodyLimit), path, "application/json", body)
