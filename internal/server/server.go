@@ -26,8 +26,7 @@ type Server struct {
 	ln              net.Listener
 	srv             *http.Server
 	sqlDB           *sql.DB
-	register        http.HandlerFunc
-	login           http.HandlerFunc
+	authDeps        authentication.Deps
 	authorize       func(http.Handler) http.Handler
 	config.Config
 }
@@ -71,8 +70,7 @@ func newServer(
 		logger:          logger,
 		shutdownTimeout: DefaultShutdownTimeout,
 		sqlDB:           sqlDB,
-		register:        authentication.Register(logger, registration.Register),
-		login:           authentication.Login(logger, login.Login),
+		authDeps:        authentication.Deps{Register: registration.Register, Login: login.Login},
 		authorize:       authorization.Middleware(tokens.ParseRequest),
 		Config:          cfg,
 	}

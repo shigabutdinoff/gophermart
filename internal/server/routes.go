@@ -1,17 +1,19 @@
 package server
 
 import (
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/logging"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
 )
 
 func (s *Server) setupRoutes() {
 	router := chi.NewRouter()
 
 	router.Use(logging.WithLogging(s.logger))
-	router.Post("/api/user/register", s.register)
-	router.Post("/api/user/login", s.login)
+	api := humachi.New(router, authentication.APIConfig())
+	authentication.RegisterRoutes(api, s.logger, s.authDeps)
 
 	s.router = router
 }

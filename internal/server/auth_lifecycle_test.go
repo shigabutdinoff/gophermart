@@ -135,7 +135,7 @@ func serveLifecycleRequest(
 	return response
 }
 
-// assertLifecycleResponse проверяет статус и конверт сообщения в теле ответа.
+// assertLifecycleResponse проверяет статус и тело ответа маршрута.
 func assertLifecycleResponse(
 	t *testing.T,
 	response *httptest.ResponseRecorder,
@@ -143,15 +143,20 @@ func assertLifecycleResponse(
 ) {
 	t.Helper()
 	assert.Equal(t, status, response.Code)
-	var body struct {
-		Message string `json:"message"`
+	if status == http.StatusOK {
+		assert.Empty(t, response.Body.Bytes())
+		return
 	}
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
-	assert.NotEmpty(t, body.Message)
-	if status != http.StatusOK {
-		assert.Empty(t, response.Header().Get("Authorization"))
-		assert.Empty(t, response.Header().Values("Set-Cookie"))
+
+	assert.Equal(t, "application/problem+json", response.Header().Get("Content-Type"))
+	var problem struct {
+		Title  string `json:"title"`
+		Detail string `json:"detail"`
 	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &problem))
+	assert.NotEmpty(t, problem.Detail)
+	assert.Empty(t, response.Header().Get("Authorization"))
+	assert.Empty(t, response.Header().Values("Set-Cookie"))
 }
 
 type controllableConnector struct {

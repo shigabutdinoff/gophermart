@@ -146,7 +146,7 @@ func TestServerSharesOnePoolAcrossRepositoryMigrationsAndShutdown(t *testing.T) 
 		strings.NewReader(`{"login":"user","password":"password"}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
-	server.register(httptest.NewRecorder(), request)
+	server.router.ServeHTTP(httptest.NewRecorder(), request)
 
 	assert.Same(t, sqlDB, repositoryPool)
 

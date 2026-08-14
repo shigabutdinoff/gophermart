@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -21,6 +23,19 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/auth"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
 )
+
+// registerHandler собирает маршрут регистрации так же, как это делает сервер.
+func registerHandler(register authentication.CredentialsFunc) http.Handler {
+	router := chi.NewRouter()
+	api := humachi.New(router, authentication.APIConfig())
+	authentication.RegisterRoutes(
+		api,
+		zap.NewNop(),
+		authentication.Deps{Register: register},
+	)
+
+	return router
+}
 
 func TestRegisterConcurrentEquivalentLoginsCreateExactlyOneUser(t *testing.T) {
 	bodies := []string{
@@ -36,7 +51,7 @@ func TestRegisterConcurrentEquivalentLoginsCreateExactlyOneUser(t *testing.T) {
 	users.createRelease = createRelease
 	tokens := &acceptanceTokenIssuer{}
 	service := auth.NewRegisterService(users, auth.Argon2Passwords{}, tokens)
-	handler := authentication.Register(zap.NewNop(), service.Register)
+	handler := registerHandler(service.Register)
 	responses := make([]*httptest.ResponseRecorder, len(bodies))
 	start := make(chan struct{})
 	var wait sync.WaitGroup
@@ -70,20 +85,12 @@ func TestRegisterConcurrentEquivalentLoginsCreateExactlyOneUser(t *testing.T) {
 	assert.ElementsMatch(t, []int{http.StatusOK, http.StatusConflict}, statuses)
 	for _, response := range responses {
 		if response.Code == http.StatusOK {
-			assert.JSONEq(
-				t,
-				`{"message":"`+authentication.MessageRegistered+`"}`,
-				response.Body.String(),
-			)
 			assert.NotEmpty(t, response.Header().Get("Authorization"))
 			assert.Len(t, response.Header().Values("Set-Cookie"), 1)
 			continue
 		}
-		assert.JSONEq(
-			t,
-			`{"message":"`+authentication.MessageLoginTaken+`"}`,
-			response.Body.String(),
-		)
+		assert.Contains(t, response.Body.String(), authentication.MessageLoginTaken)
+		assert.Equal(t, "application/problem+json", response.Header().Get("Content-Type"))
 		assert.Empty(t, response.Header().Get("Authorization"))
 		assert.Empty(t, response.Header().Values("Set-Cookie"))
 	}
@@ -122,7 +129,7 @@ func TestRegisterFailuresDoNotPersistUserOrReturnToken(t *testing.T) {
 			users.createErr = test.storageErr
 			tokens := &acceptanceTokenIssuer{}
 			service := auth.NewRegisterService(users, test.passwords, tokens)
-			handler := authentication.Register(zap.NewNop(), service.Register)
+			handler := registerHandler(service.Register)
 			request := httptest.NewRequest(
 				http.MethodPost,
 				"/api/user/register",
@@ -134,10 +141,10 @@ func TestRegisterFailuresDoNotPersistUserOrReturnToken(t *testing.T) {
 			handler.ServeHTTP(response, request)
 
 			assert.Equal(t, http.StatusInternalServerError, response.Code)
-			assert.JSONEq(
+			assert.Contains(
 				t,
-				`{"message":"`+authentication.MessageInternalError+`"}`,
 				response.Body.String(),
+				authentication.MessageInternalError,
 			)
 			assert.Empty(t, response.Header().Get("Authorization"))
 			assert.Empty(t, response.Header().Values("Set-Cookie"))
