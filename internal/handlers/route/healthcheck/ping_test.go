@@ -2,6 +2,7 @@ package healthcheck
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -37,20 +38,46 @@ func servePing(pinger Pinger) *httptest.ResponseRecorder {
 	return rec
 }
 
+// reportStatus достаёт из отчёта состояние сервиса и проверки хранилища.
+func reportStatus(t *testing.T, rec *httptest.ResponseRecorder) (string, map[string]any) {
+	t.Helper()
+
+	var report struct {
+		Status  string                    `json:"status"`
+		Details map[string]map[string]any `json:"details"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &report))
+
+	return report.Status, report.Details[DatabaseCheck]
+}
+
 func TestPing_DatabaseReachable(t *testing.T) {
 	rec := servePing(&fakePinger{})
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-	assert.JSONEq(t, `{"status":"ok"}`, rec.Body.String())
+	assert.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+	status, database := reportStatus(t, rec)
+	assert.Equal(t, "up", status)
+	assert.Equal(t, "up", database["status"])
 }
 
 func TestPing_DatabaseUnreachable(t *testing.T) {
 	rec := servePing(&fakePinger{err: context.DeadlineExceeded})
 
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Equal(t, "text/plain; charset=utf-8", rec.Header().Get("Content-Type"))
-	assert.Equal(t, "Нет соединения с БД\n", rec.Body.String())
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+	status, database := reportStatus(t, rec)
+	assert.Equal(t, "down", status)
+	assert.Equal(t, "down", database["status"])
+}
+
+func TestPing_NoDatabase(t *testing.T) {
+	rec := servePing(&fakePinger{err: errors.New("database is unavailable")})
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	status, database := reportStatus(t, rec)
+	assert.Equal(t, "down", status)
+	assert.Contains(t, database["error"], "database is unavailable")
 }
 
 func TestPing_UsesCurrentDatabaseOnEveryRequest(t *testing.T) {
@@ -63,7 +90,7 @@ func TestPing_UsesCurrentDatabaseOnEveryRequest(t *testing.T) {
 
 	first := httptest.NewRecorder()
 	handler(first, httptest.NewRequest(http.MethodGet, "/ping", nil))
-	assert.Equal(t, http.StatusInternalServerError, first.Code)
+	assert.Equal(t, http.StatusServiceUnavailable, first.Code)
 
 	current = &fakePinger{}
 	second := httptest.NewRecorder()
@@ -81,15 +108,33 @@ func TestPing_AppliesDeadline(t *testing.T) {
 	assert.LessOrEqual(t, pinger.deadline.Sub(pinger.checkedAt), PingTimeout)
 }
 
-func TestPing_PropagatesCanceledRequestContext(t *testing.T) {
-	pinger := &fakePinger{}
+// На отменённый контекст запроса приходит отказ, а не успешный отчёт.
+func TestPing_FailsOnCanceledRequestContext(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
 	ctx, cancel := context.WithCancel(req.Context())
 	cancel()
 
-	Ping(func() Pinger { return pinger })(rec, req.WithContext(ctx))
+	Ping(func() Pinger { return &fakePinger{} })(rec, req.WithContext(ctx))
 
-	assert.ErrorIs(t, pinger.contextErr, context.Canceled)
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	status, _ := reportStatus(t, rec)
+	assert.Equal(t, "down", status)
+}
+
+// Один обработчик на оба пути даёт побайтово одинаковые ответы.
+func TestPing_SameHandlerAnswersBothRoutes(t *testing.T) {
+	handler := Ping(func() Pinger { return &fakePinger{} })
+
+	ready := httptest.NewRecorder()
+	handler(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	ping := httptest.NewRecorder()
+	handler(ping, httptest.NewRequest(http.MethodGet, "/ping", nil))
+
+	require.Equal(t, ready.Code, ping.Code)
+	assert.Equal(t, ready.Header().Get("Content-Type"), ping.Header().Get("Content-Type"))
+
+	readyStatus, _ := reportStatus(t, ready)
+	pingStatus, _ := reportStatus(t, ping)
+	assert.Equal(t, readyStatus, pingStatus)
 }
