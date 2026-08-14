@@ -25,7 +25,7 @@ type registerBody struct {
 	// лишние поля тела игнорируются, как и до перехода на схему
 	_ struct{} `additionalProperties:"true"`
 	loginField
-	Password string `json:"password" minLength:"1" maxLength:"128" doc:"Пароль пользователя"`
+	Password string `json:"password" minLength:"8" maxLength:"128" doc:"Пароль пользователя"`
 }
 
 // loginBody не применяет парольную политику, вход требует лишь непустых полей.
