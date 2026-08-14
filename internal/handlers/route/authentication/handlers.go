@@ -69,6 +69,7 @@ func registerRegistrationRoute(api huma.API, logger *zap.Logger, register Creden
 		Middlewares:   options.Middlewares,
 		Errors: []int{
 			http.StatusBadRequest,
+			http.StatusRequestEntityTooLarge,
 			http.StatusConflict,
 			http.StatusInternalServerError,
 		},
@@ -97,6 +98,7 @@ func registerLoginRoute(api huma.API, logger *zap.Logger, login CredentialsFunc,
 		Middlewares:   options.Middlewares,
 		Errors: []int{
 			http.StatusBadRequest,
+			http.StatusRequestEntityTooLarge,
 			http.StatusUnauthorized,
 			http.StatusInternalServerError,
 		},

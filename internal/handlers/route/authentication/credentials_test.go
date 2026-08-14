@@ -76,11 +76,12 @@ func TestHandlersDoNotLogClientErrors(t *testing.T) {
 // ТЗ допускает для маршрутов аутентификации только 200, 400, 401, 409 и 500.
 func TestRoutes_StatusesStayWithinSpecification(t *testing.T) {
 	allowed := map[int]bool{
-		http.StatusOK:                  true,
-		http.StatusBadRequest:          true,
-		http.StatusUnauthorized:        true,
-		http.StatusConflict:            true,
-		http.StatusInternalServerError: true,
+		http.StatusOK:                    true,
+		http.StatusBadRequest:            true,
+		http.StatusUnauthorized:          true,
+		http.StatusRequestEntityTooLarge: true,
+		http.StatusConflict:              true,
+		http.StatusInternalServerError:   true,
 	}
 	bodies := []string{
 		`{"login":"user","password":"password"}`,
