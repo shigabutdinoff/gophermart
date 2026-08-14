@@ -24,6 +24,7 @@ func TestRouter_AuthRouteScopeAndPublicAccess(t *testing.T) {
 		body   string
 		status int
 	}{
+		{http.MethodGet, "/ping", "", http.StatusServiceUnavailable},
 		{http.MethodPost, "/api/user/register", validBody, http.StatusInternalServerError},
 		{http.MethodPost, "/api/user/login", validBody, http.StatusInternalServerError},
 		{http.MethodPost, "/api/user/orders", "", http.StatusUnauthorized},
@@ -111,6 +112,7 @@ func TestRouter_AuthContentTypeUsesChiSemantics(t *testing.T) {
 		{"vendor json rejected", http.MethodPost, "/api/user/register", validBody, []string{"application/vnd.gophermart+json"}, http.StatusUnsupportedMediaType},
 		{"other type rejected", http.MethodPost, "/api/user/login", validBody, []string{"text/json"}, http.StatusUnsupportedMediaType},
 		{"missing type rejected", http.MethodPost, "/api/user/login", validBody, nil, http.StatusUnsupportedMediaType},
+		{"ping is not filtered", http.MethodGet, "/ping", "body", []string{"text/plain"}, http.StatusServiceUnavailable},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -130,6 +132,29 @@ func TestRouter_AuthContentTypeUsesChiSemantics(t *testing.T) {
 	}
 }
 
+func TestRouterDoesNotRateLimitRegistrationOrInternalLoginFailures(t *testing.T) {
+	_, srv := newTestServer(t, zap.NewNop(), config.Default())
+	body := `{"login":"user","password":"password"}`
+
+	post := func(path string) *http.Response {
+		request, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
+		require.NoError(t, err)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := srv.Client().Do(request)
+		require.NoError(t, err)
+		return response
+	}
+
+	for _, path := range []string{"/api/user/login", "/api/user/register"} {
+		for range auth.MaxLoginAttempts + 1 {
+			response := post(path)
+			assert.Equal(t, http.StatusInternalServerError, response.StatusCode)
+			assert.Empty(t, response.Header.Get("Retry-After"))
+			response.Body.Close()
+		}
+	}
+}
+
 func TestRouter_MiddlewareRejectionsHaveEmptyBody(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -137,6 +162,12 @@ func TestRouter_MiddlewareRejectionsHaveEmptyBody(t *testing.T) {
 		headers map[string]string
 		status  int
 	}{
+		{
+			name:    "неподдерживаемый Content-Type",
+			body:    `{"login":"user","password":"password"}`,
+			headers: map[string]string{"Content-Type": "text/plain"},
+			status:  http.StatusUnsupportedMediaType,
+		},
 		{
 			name: "неподдерживаемая кодировка",
 			body: `{"login":"user","password":"password"}`,
@@ -154,12 +185,6 @@ func TestRouter_MiddlewareRejectionsHaveEmptyBody(t *testing.T) {
 				"Content-Encoding": "gzip",
 			},
 			status: http.StatusBadRequest,
-		},
-		{
-			name:    "неподдерживаемый Content-Type",
-			body:    `{"login":"user","password":"password"}`,
-			headers: map[string]string{"Content-Type": "text/plain"},
-			status:  http.StatusUnsupportedMediaType,
 		},
 	}
 

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 
 	"go.uber.org/zap"
 )
 
+// dummyPassword хешируется один раз за процесс и никому не принадлежит
 const dummyPassword = "password of a user that does not exist"
 
 // LoginService проверяет учётные данные и выпускает токен.
@@ -29,7 +31,6 @@ type LoginDeps struct {
 	DummyHash string
 }
 
-// NewLoginService собирает службу входа из готовых зависимостей.
 func NewLoginService(deps LoginDeps) (*LoginService, error) {
 	if deps.Limiter == nil {
 		return nil, errors.New("login limiter must not be nil")
@@ -42,12 +43,16 @@ func NewLoginService(deps LoginDeps) (*LoginService, error) {
 	}
 
 	return &LoginService{
-		logger: deps.Logger, users: deps.Users, verifier: deps.Verifier, tokens: deps.Tokens,
-		limiter: deps.Limiter, dummyHash: deps.DummyHash,
+		logger:    deps.Logger,
+		users:     deps.Users,
+		verifier:  deps.Verifier,
+		tokens:    deps.Tokens,
+		limiter:   deps.Limiter,
+		dummyHash: deps.DummyHash,
 	}, nil
 }
 
-// NewLoginDummyHash считает хеш пароля несуществующего пользователя.
+// NewLoginDummyHash считает хеш-пустышку один раз на процесс.
 func NewLoginDummyHash(hasher PasswordHasher) (string, error) {
 	dummyHash, err := hasher.Hash(dummyPassword)
 	if err != nil {
@@ -60,19 +65,15 @@ func NewLoginDummyHash(hasher PasswordHasher) (string, error) {
 	return dummyHash, nil
 }
 
-// Login проверяет учётные данные и выпускает новый токен.
 func (s *LoginService) Login(
 	ctx context.Context,
 	credentials Credentials,
-	remoteAddr ...string,
+	client netip.Addr,
 ) (LoginResult, error) {
-	client := ""
-	if len(remoteAddr) != 0 {
-		client = DirectIP(remoteAddr[0])
-	}
-	key := credentials.Login + "\x00" + client
+	key := credentials.Login + "\x00" + client.String()
 	release := s.limiter.Acquire(key)
 	defer release()
+
 	if retryAfter, limited := s.limiter.Check(key); limited {
 		return LoginResult{RetryAfter: retryAfter}, ErrRateLimited
 	}
@@ -80,6 +81,7 @@ func (s *LoginService) Login(
 	user, err := s.users.FindByLogin(ctx, credentials.Login)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
+			// Проверка пустышки уравнивает время ответа неизвестному логину.
 			dummyErr := s.verifier.Verify(s.dummyHash, credentials.Password)
 			if dummyErr != nil && !errors.Is(dummyErr, ErrPasswordMismatch) {
 				s.logger.Error("Не удалось проверить хеш-пустышку", zap.Error(dummyErr))

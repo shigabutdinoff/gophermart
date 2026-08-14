@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,11 +14,12 @@ import (
 )
 
 const (
-	loginClient    = "192.0.2.1:1234"
 	loginLimitKey  = "user\x00192.0.2.1"
 	otherLimitKey  = "user\x00192.0.2.2"
 	loginRetryWait = 12
 )
+
+var loginClient = netip.MustParseAddr("192.0.2.1")
 
 func loginAttempt(service *auth.LoginService) (auth.LoginResult, error) {
 	return service.Login(

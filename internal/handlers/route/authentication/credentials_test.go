@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -97,7 +98,7 @@ func TestRoutes_StatusesStayWithinSpecification(t *testing.T) {
 				Register: func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 					return handlerTestToken, nil
 				},
-				Login: func(context.Context, auth.Credentials, string) (auth.LoginResult, error) {
+				Login: func(context.Context, auth.Credentials, netip.Addr) (auth.LoginResult, error) {
 					return auth.LoginResult{Token: handlerTestToken}, nil
 				},
 			}

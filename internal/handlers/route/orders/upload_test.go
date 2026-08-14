@@ -196,20 +196,20 @@ func TestUploadRejectsRequestBeforeService(t *testing.T) {
 			wantStatus:  http.StatusUnauthorized,
 		},
 		{
-			name:        "тело больше лимита",
-			userID:      testUserID,
-			contentType: "text/plain",
-			body:        strings.Repeat("1", 32),
-			bodyLimit:   8,
-			wantStatus:  http.StatusRequestEntityTooLarge,
-		},
-		{
 			name:        "чужой тип содержимого",
 			userID:      testUserID,
 			contentType: "application/json",
 			body:        testNumber,
 			bodyLimit:   testBodyLimit,
 			wantStatus:  http.StatusUnsupportedMediaType,
+		},
+		{
+			name:        "тело больше лимита",
+			userID:      testUserID,
+			contentType: "text/plain",
+			body:        strings.Repeat("1", 32),
+			bodyLimit:   8,
+			wantStatus:  http.StatusRequestEntityTooLarge,
 		},
 	}
 

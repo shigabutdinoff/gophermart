@@ -2,7 +2,6 @@ package auth
 
 import (
 	"math"
-	"net"
 	"sync"
 	"time"
 
@@ -41,7 +40,10 @@ func (l *LoginLimiter) Acquire(key string) func() {
 
 	var once sync.Once
 	return func() {
-		once.Do(func() { _ = l.gates.Unlock(key) })
+		once.Do(func() {
+			// ключ отпускается ровно раз, ошибка означала бы повторный вызов
+			_ = l.gates.Unlock(key)
+		})
 	}
 }
 
@@ -105,20 +107,4 @@ func (l *LoginLimiter) maintainLocked(now time.Time) {
 		}
 	}
 	l.lastSweep = now
-}
-
-// DirectIP берёт адрес пира и отбрасывает порт.
-func DirectIP(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err == nil {
-		if ip := net.ParseIP(host); ip != nil {
-			return ip.String()
-		}
-		return host
-	}
-	if ip := net.ParseIP(remoteAddr); ip != nil {
-		return ip.String()
-	}
-
-	return remoteAddr
 }

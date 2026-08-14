@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,6 +17,8 @@ import (
 )
 
 const testDummyHash = "dummy-hash"
+
+var testClientIP = netip.MustParseAddr("192.0.2.1")
 
 // loginCollaborators держит три узких зависимости входа. Незаявленный вызов
 // мока валит тест сам, поэтому «не звали» отдельной проверки не требует.
@@ -75,6 +78,7 @@ func TestLoginServiceLoginIssuesTokenForNormalizedLogin(t *testing.T) {
 	got, err := collaborators.service().Login(
 		context.Background(),
 		auth.Credentials{Login: "alice", Password: "original-password"},
+		testClientIP,
 	)
 
 	require.NoError(t, err)
@@ -100,6 +104,7 @@ func TestLoginServiceLoginRejectsUnknownUserAndWrongPasswordIdentically(t *testi
 			got, err := collaborators.service().Login(
 				context.Background(),
 				auth.Credentials{Login: "alice", Password: "password"},
+				testClientIP,
 			)
 
 			assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
@@ -136,6 +141,7 @@ func TestLoginServiceLoginReturnsInternalFailures(t *testing.T) {
 			got, err := collaborators.service().Login(
 				context.Background(),
 				auth.Credentials{Login: "alice", Password: "password"},
+				testClientIP,
 			)
 
 			assert.ErrorIs(t, err, cmp.Or(test.findErr, test.verifyErr, test.issueErr))

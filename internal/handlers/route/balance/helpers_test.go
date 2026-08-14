@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	testUserID          = 42
-	testBodyLimit int64 = 1 << 20
+	testBodyLimit = 1 << 20
+	testUserID    = 42
 )
 
 func newRouter(logger *zap.Logger, deps Deps) http.Handler {

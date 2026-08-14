@@ -9,6 +9,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLoginLimiterSerializesSameKeyAdmissionsAndKeepsKeysIndependent(t *testing.T) {
+	limiter := NewLoginLimiter()
+	releaseFirst := limiter.Acquire("same")
+
+	secondAcquired := make(chan func(), 1)
+	go func() { secondAcquired <- limiter.Acquire("same") }()
+
+	releaseOther := limiter.Acquire("other")
+	releaseOther()
+	select {
+	case release := <-secondAcquired:
+		release()
+		require.FailNow(t, "same key acquired concurrently")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	releaseFirst()
+	select {
+	case release := <-secondAcquired:
+		release()
+	case <-time.After(time.Second):
+		require.FailNow(t, "same key did not acquire after release")
+	}
+}
+
+func TestLoginLimiterAdmissionReleaseIsIdempotent(t *testing.T) {
+	limiter := NewLoginLimiter()
+	release := limiter.Acquire("key")
+	require.NotPanics(t, func() {
+		release()
+		release()
+	})
+}
+
 func TestLoginLimiterBlocksSixthAttemptWithCeilRetryAfter(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		limiter := NewLoginLimiter()
@@ -169,10 +203,4 @@ func TestLoginLimiterSweepKeepsPartiallyRecoveredKey(t *testing.T) {
 
 		assert.NotContains(t, limiter.limiters, "target")
 	})
-}
-
-func TestDirectIPUsesOnlyRemoteAddressAndIgnoresPort(t *testing.T) {
-	assert.Equal(t, "192.0.2.10", DirectIP("192.0.2.10:54321"))
-	assert.Equal(t, "2001:db8::1", DirectIP("[2001:db8::1]:54321"))
-	assert.Equal(t, "192.0.2.10", DirectIP("192.0.2.10"))
 }

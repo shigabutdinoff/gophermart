@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -185,7 +186,7 @@ func buildAuthDeps(
 
 	return authentication.Deps{
 		Register: registration.Register,
-		Login: func(ctx context.Context, credentials auth.Credentials, client string) (auth.LoginResult, error) {
+		Login: func(ctx context.Context, credentials auth.Credentials, client netip.Addr) (auth.LoginResult, error) {
 			return login.Login(ctx, credentials, client)
 		},
 	}, nil

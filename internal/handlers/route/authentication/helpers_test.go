@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ func registerReturning(token auth.IssuedToken, err error, calls *int) Deps {
 // loginReturning делает то же для входа.
 func loginReturning(result auth.LoginResult, err error, calls *int) Deps {
 	return Deps{
-		Login: func(context.Context, auth.Credentials, string) (auth.LoginResult, error) {
+		Login: func(context.Context, auth.Credentials, netip.Addr) (auth.LoginResult, error) {
 			if calls != nil {
 				*calls++
 			}

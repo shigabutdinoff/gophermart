@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -33,13 +34,15 @@ const (
 // CredentialsFunc заводит учётную запись по нормализованным данным.
 type CredentialsFunc func(context.Context, auth.Credentials) (auth.IssuedToken, error)
 
-type LoginFunc func(context.Context, auth.Credentials, string) (auth.LoginResult, error)
+// LoginFunc проверяет данные входа с учётом адреса клиента.
+type LoginFunc func(context.Context, auth.Credentials, netip.Addr) (auth.LoginResult, error)
 
 type Deps struct {
 	Register CredentialsFunc
 	Login    LoginFunc
 }
 
+// Options задаёт параметры публикации маршрутов аутентификации.
 type Options = route.Options
 
 type registerInput struct {
@@ -57,12 +60,22 @@ type authOutput struct {
 }
 
 // RegisterRoutes публикует маршруты аутентификации как huma-операции.
-func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps, options Options) {
+func RegisterRoutes(
+	api huma.API,
+	logger *zap.Logger,
+	deps Deps,
+	options Options,
+) {
 	registerRegistrationRoute(api, logger, deps.Register, options)
 	registerLoginRoute(api, logger, deps.Login, options)
 }
 
-func registerRegistrationRoute(api huma.API, logger *zap.Logger, register CredentialsFunc, options Options) {
+func registerRegistrationRoute(
+	api huma.API,
+	logger *zap.Logger,
+	register CredentialsFunc,
+	options Options,
+) {
 	huma.Register(api, huma.Operation{
 		OperationID: "register-user",
 		Method:      http.MethodPost,
@@ -75,8 +88,8 @@ func registerRegistrationRoute(api huma.API, logger *zap.Logger, register Creden
 		Middlewares:   options.Middlewares,
 		Errors: []int{
 			http.StatusBadRequest,
-			http.StatusRequestEntityTooLarge,
 			http.StatusConflict,
+			http.StatusRequestEntityTooLarge,
 			http.StatusInternalServerError,
 		},
 	}, func(ctx context.Context, in *registerInput) (*authOutput, error) {
@@ -93,7 +106,12 @@ func registerRegistrationRoute(api huma.API, logger *zap.Logger, register Creden
 	})
 }
 
-func registerLoginRoute(api huma.API, logger *zap.Logger, login LoginFunc, options Options) {
+func registerLoginRoute(
+	api huma.API,
+	logger *zap.Logger,
+	login LoginFunc,
+	options Options,
+) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "login-user",
 		Method:        http.MethodPost,
@@ -105,14 +123,14 @@ func registerLoginRoute(api huma.API, logger *zap.Logger, login LoginFunc, optio
 		Middlewares:   options.Middlewares,
 		Errors: []int{
 			http.StatusBadRequest,
-			http.StatusRequestEntityTooLarge,
 			http.StatusUnauthorized,
 			http.StatusTooManyRequests,
+			http.StatusRequestEntityTooLarge,
 			http.StatusInternalServerError,
 		},
 	}, func(ctx context.Context, in *loginInput) (*authOutput, error) {
 		credentials := auth.NormalizeCredentials(in.Body.Login, in.Body.Password)
-		result, err := login(ctx, credentials, middleware.GetClientIPAddr(ctx).String())
+		result, err := login(ctx, credentials, middleware.GetClientIPAddr(ctx))
 		switch {
 		case err == nil:
 			return authenticated(result.Token), nil

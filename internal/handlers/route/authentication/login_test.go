@@ -1,8 +1,12 @@
 package authentication
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,4 +64,43 @@ func TestLogin_MapsAllOutcomes(t *testing.T) {
 			assertProblem(t, response, tt.status, tt.message)
 		})
 	}
+}
+
+// Ключ лимитера строится по адресу соединения, заголовкам прокси не верим.
+func TestLogin_TakesClientAddressFromConnection(t *testing.T) {
+	var seen netip.Addr
+	deps := Deps{
+		Login: func(_ context.Context, _ auth.Credentials, client netip.Addr) (auth.LoginResult, error) {
+			seen = client
+			return auth.LoginResult{Token: handlerTestToken}, nil
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, loginPath,
+		strings.NewReader(`{"login":"user","password":"password"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-For", "203.0.113.7")
+	request.RemoteAddr = "192.0.2.10:4321"
+
+	newRouter(zap.NewNop(), deps, testBodyLimit).ServeHTTP(httptest.NewRecorder(), request)
+
+	assert.Equal(t, "192.0.2.10", seen.String())
+}
+
+// Форма IPv4-в-IPv6 сводится к своему IPv4, иначе ключ лимитера раздвоится.
+func TestLogin_UnmapsIPv4MappedAddress(t *testing.T) {
+	var seen netip.Addr
+	deps := Deps{
+		Login: func(_ context.Context, _ auth.Credentials, client netip.Addr) (auth.LoginResult, error) {
+			seen = client
+			return auth.LoginResult{Token: handlerTestToken}, nil
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, loginPath,
+		strings.NewReader(`{"login":"user","password":"password"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = "[::ffff:192.0.2.10]:4321"
+
+	newRouter(zap.NewNop(), deps, testBodyLimit).ServeHTTP(httptest.NewRecorder(), request)
+
+	assert.Equal(t, "192.0.2.10", seen.String())
 }
