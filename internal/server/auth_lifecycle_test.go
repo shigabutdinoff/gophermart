@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -15,9 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+	"gorm.io/gorm"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
-	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 	ordersroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/orders"
 	"github.com/shigabutdinoff/gophermart/internal/order"
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
@@ -25,11 +26,10 @@ import (
 )
 
 func TestIndependentSecretsAreIsolatedOnProtectedOrderRoute(t *testing.T) {
-	const firstSecret = "0123456789abcdef0123456789abcdef"
-	firstTokens, err := auth.NewJWTManager([]byte(firstSecret))
+	firstTokens, err := auth.NewJWTManager([]byte(testJWTSecret))
 	require.NoError(t, err)
 	secondTokens, err := auth.NewJWTManager(
-		[]byte(strings.Repeat("a", len(firstSecret))),
+		[]byte(strings.Repeat("a", len(testJWTSecret))),
 	)
 	require.NoError(t, err)
 	issued, err := firstTokens.Issue(42)
@@ -74,11 +74,70 @@ func TestIndependentSecretsAreIsolatedOnProtectedOrderRoute(t *testing.T) {
 	assert.Zero(t, secondCalls)
 }
 
+func TestRouterDatabaseHandleRecoversWithoutRestart(t *testing.T) {
+	sqlDB, mock := newPingMock(t, errors.New("database is unavailable"))
+	// второй пинг отвечает уже восстановленной базой
+	mock.ExpectPing()
+	session, gormDB := testkit.NewDryRunSession(t)
+	var availability atomic.Bool
+	require.NoError(t, gormDB.Callback().Create().Before("gorm:create").Register(
+		"test:recoverable-users-table",
+		func(tx *gorm.DB) {
+			if !availability.Load() {
+				tx.AddError(errors.New("database is unavailable"))
+				return
+			}
+			tx.Statement.SetColumn("ID", int64(42))
+		},
+	))
+	require.NoError(t, gormDB.Callback().Query().Before("gorm:query").Register(
+		"test:query-missing-user",
+		func(tx *gorm.DB) {
+			if !availability.Load() {
+				tx.AddError(errors.New("database is unavailable"))
+				return
+			}
+			tx.AddError(gorm.ErrRecordNotFound)
+		},
+	))
+	server, err := newServer(zap.NewNop(), newTestConfig(), session, sqlDB)
+	require.NoError(t, err)
+	t.Cleanup(server.closeDatabase)
+	router := server.router
+
+	pingBefore := serveLifecycleRequest(router, http.MethodGet, "/ping", "")
+	assert.Equal(t, http.StatusServiceUnavailable, pingBefore.Code)
+	registerBefore := serveLifecycleRequest(
+		router,
+		http.MethodPost,
+		"/api/user/register",
+		`{"login":"before-recovery","password":"password"}`,
+	)
+	assertLifecycleResponse(t, registerBefore, http.StatusInternalServerError)
+
+	availability.Store(true)
+
+	pingAfter := serveLifecycleRequest(router, http.MethodGet, "/ping", "")
+	assert.Equal(t, http.StatusOK, pingAfter.Code)
+	registerAfter := serveLifecycleRequest(
+		router,
+		http.MethodPost,
+		"/api/user/register",
+		`{"login":"after-recovery","password":"password"}`,
+	)
+	assertLifecycleResponse(t, registerAfter, http.StatusOK)
+	assert.NotEmpty(t, registerAfter.Header().Get("Authorization"))
+	assert.Len(t, registerAfter.Header().Values("Set-Cookie"), 1)
+	assert.Same(t, router, server.router)
+}
+
 func TestRouterMissingAuthSchemaAfterMigrationFailureReturnsControlledError(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
-	cfg := config.Default()
+	cfg := newTestConfig()
 	cfg.DatabaseURI = "postgresql://user:password@database/gophermart"
-	sqlDB, _ := newPingMock(t, nil)
+	sqlDB, schemaMock := newPingMock(t, nil)
+	// проба готовности спрашивает базу после миграций
+	schemaMock.ExpectPing()
 	gormDB := testkit.OpenDryRunGORM(t, sqlDB)
 	testkit.FailStatements(t, gormDB, missingUsersTableError())
 	server, err := newServer(zap.New(core), cfg, database.NewSession(gormDB), sqlDB)
@@ -92,6 +151,8 @@ func TestRouterMissingAuthSchemaAfterMigrationFailureReturnsControlledError(t *t
 	)
 
 	require.Equal(t, 1, logs.FilterMessage("Не удалось применить миграции").Len())
+	ping := serveLifecycleRequest(server.router, http.MethodGet, "/ping", "")
+	assert.Equal(t, http.StatusOK, ping.Code)
 	for _, path := range []string{"/api/user/register", "/api/user/login"} {
 		t.Run(path, func(t *testing.T) {
 			response := serveLifecycleRequest(
@@ -136,6 +197,7 @@ func assertLifecycleResponse(
 	t.Helper()
 	assert.Equal(t, status, response.Code)
 	if status == http.StatusOK {
+		// успех несёт токен заголовком и cookie, тело задано ТЗ пустым
 		assert.Empty(t, response.Body.Bytes())
 		return
 	}

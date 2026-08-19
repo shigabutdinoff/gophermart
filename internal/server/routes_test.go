@@ -78,17 +78,14 @@ func TestRouter_PanicAnswersInternalError(t *testing.T) {
 
 func TestRouter_LogsEveryRequest(t *testing.T) {
 	core, observed := observer.New(zap.InfoLevel)
-	s, srv := newTestServer(t, zap.New(core), config.Default())
-	s.router.Get("/ping", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	_, srv := newTestServer(t, zap.New(core), config.Default())
 
 	reqs := []struct {
 		method string
 		path   string
 		want   int
 	}{
-		{http.MethodGet, "/ping", http.StatusOK},
+		{http.MethodGet, "/ping", http.StatusServiceUnavailable},
 		{http.MethodPost, "/ping", http.StatusMethodNotAllowed},
 		{http.MethodGet, "/api/unknown", http.StatusNotFound},
 	}
