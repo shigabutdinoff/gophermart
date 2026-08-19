@@ -67,6 +67,11 @@ func TestRegister_NamesViolatedCredentialsField(t *testing.T) {
 		location string
 	}{
 		{
+			name:     "короткий пароль",
+			body:     `{"login":"user","password":"short"}`,
+			location: "body.password",
+		},
+		{
 			name:     "длинный login",
 			body:     `{"login":"` + strings.Repeat("l", 256) + `","password":"password"}`,
 			location: "body.login",
