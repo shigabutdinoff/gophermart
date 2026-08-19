@@ -36,10 +36,12 @@ func TestLogin_MapsAllOutcomes(t *testing.T) {
 		err     error
 		status  int
 		message string
+		retry   string
 	}{
-		{"success", auth.LoginResult{Token: handlerTestToken}, nil, http.StatusOK, ""},
-		{"invalid", auth.LoginResult{}, auth.ErrInvalidCredentials, http.StatusUnauthorized, MessageInvalidCredentials},
-		{"internal", auth.LoginResult{}, errors.New("storage"), http.StatusInternalServerError, message.Internal},
+		{"success", auth.LoginResult{Token: handlerTestToken}, nil, http.StatusOK, "", ""},
+		{"invalid", auth.LoginResult{}, auth.ErrInvalidCredentials, http.StatusUnauthorized, MessageInvalidCredentials, ""},
+		{"limited", auth.LoginResult{RetryAfter: 7}, auth.ErrRateLimited, http.StatusTooManyRequests, MessageTooManyAttempts, "7"},
+		{"internal", auth.LoginResult{}, errors.New("storage"), http.StatusInternalServerError, message.Internal, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -50,6 +52,7 @@ func TestLogin_MapsAllOutcomes(t *testing.T) {
 			)
 
 			require.Equal(t, tt.status, response.Code)
+			assert.Equal(t, tt.retry, response.Header().Get("Retry-After"))
 			if tt.status == http.StatusOK {
 				assert.Equal(t, "Bearer signed-token", response.Header().Get("Authorization"))
 				return

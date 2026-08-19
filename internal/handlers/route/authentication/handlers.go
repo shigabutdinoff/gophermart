@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -20,6 +21,7 @@ import (
 const (
 	MessageLoginTaken         = "Логин уже занят"
 	MessageInvalidCredentials = "Неверная пара логин/пароль"
+	MessageTooManyAttempts    = "Слишком много попыток аутентификации"
 )
 
 // Пути маршрутов аутентификации, заданные ТЗ.
@@ -105,6 +107,7 @@ func registerLoginRoute(api huma.API, logger *zap.Logger, login LoginFunc, optio
 			http.StatusBadRequest,
 			http.StatusRequestEntityTooLarge,
 			http.StatusUnauthorized,
+			http.StatusTooManyRequests,
 			http.StatusInternalServerError,
 		},
 	}, func(ctx context.Context, in *loginInput) (*authOutput, error) {
@@ -115,6 +118,11 @@ func registerLoginRoute(api huma.API, logger *zap.Logger, login LoginFunc, optio
 			return authenticated(result.Token), nil
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			return nil, huma.Error401Unauthorized(MessageInvalidCredentials)
+		case errors.Is(err, auth.ErrRateLimited):
+			return nil, huma.ErrorWithHeaders(
+				huma.Error429TooManyRequests(MessageTooManyAttempts),
+				http.Header{"Retry-After": []string{strconv.Itoa(result.RetryAfter)}},
+			)
 		default:
 			return nil, route.InternalError(logger, "Не удалось выполнить вход пользователя", err)
 		}
