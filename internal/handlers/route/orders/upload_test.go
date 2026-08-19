@@ -203,6 +203,14 @@ func TestUploadRejectsRequestBeforeService(t *testing.T) {
 			bodyLimit:   8,
 			wantStatus:  http.StatusRequestEntityTooLarge,
 		},
+		{
+			name:        "чужой тип содержимого",
+			userID:      testUserID,
+			contentType: "application/json",
+			body:        testNumber,
+			bodyLimit:   testBodyLimit,
+			wantStatus:  http.StatusUnsupportedMediaType,
+		},
 	}
 
 	for _, test := range tests {

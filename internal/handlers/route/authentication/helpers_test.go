@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,7 +31,12 @@ var handlerTestToken = auth.IssuedToken{
 func newRouter(logger *zap.Logger, deps Deps, bodyLimit int64) http.Handler {
 	router := chi.NewRouter()
 	api := apiconfig.NewAPI(router)
-	RegisterRoutes(api, logger, deps, Options{BodyLimit: bodyLimit})
+	RegisterRoutes(api, logger, deps, Options{
+		BodyLimit: bodyLimit,
+		Middlewares: huma.Middlewares{
+			apiconfig.AllowContentType("application/json"),
+		},
+	})
 
 	return router
 }

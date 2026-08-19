@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/shigabutdinoff/gophermart/internal/auth"
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 )
 
@@ -50,6 +51,85 @@ func TestRouter_AuthRouteScopeAndPublicAccess(t *testing.T) {
 	}
 }
 
+func TestRouter_OrderAuthorizationPrecedesContentTypeFilter(t *testing.T) {
+	server := mustNew(t, zap.NewNop(), config.Default())
+	tokens, err := auth.NewJWTManager([]byte(testJWTSecret))
+	require.NoError(t, err)
+	issued, err := tokens.Issue(42)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		authorization string
+		wantStatus    int
+	}{
+		{
+			name:       "missing token is rejected before content type",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:          "valid token reaches content type without a user lookup",
+			authorization: "Bearer " + issued.Value,
+			wantStatus:    http.StatusUnsupportedMediaType,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(
+				http.MethodPost,
+				"/api/user/orders",
+				strings.NewReader("12345678903"),
+			)
+			request.Header.Set("Content-Type", "application/json")
+			if tt.authorization != "" {
+				request.Header.Set("Authorization", tt.authorization)
+			}
+			response := httptest.NewRecorder()
+
+			server.router.ServeHTTP(response, request)
+
+			assert.Equal(t, tt.wantStatus, response.Code)
+		})
+	}
+}
+
+func TestRouter_AuthContentTypeUsesChiSemantics(t *testing.T) {
+	server := mustNew(t, zap.NewNop(), config.Default())
+	validBody := `{"login":"user","password":"password"}`
+	tests := []struct {
+		name         string
+		method       string
+		path         string
+		body         string
+		contentTypes []string
+		status       int
+	}{
+		{"exact json reaches handler", http.MethodPost, "/api/user/register", validBody, []string{"application/json"}, http.StatusInternalServerError},
+		{"malformed parameters reach handler", http.MethodPost, "/api/user/login", validBody, []string{`application/json; charset="`}, http.StatusInternalServerError},
+		{"first header value wins", http.MethodPost, "/api/user/login", validBody, []string{"application/json", "text/plain"}, http.StatusInternalServerError},
+		{"vendor json rejected", http.MethodPost, "/api/user/register", validBody, []string{"application/vnd.gophermart+json"}, http.StatusUnsupportedMediaType},
+		{"other type rejected", http.MethodPost, "/api/user/login", validBody, []string{"text/json"}, http.StatusUnsupportedMediaType},
+		{"missing type rejected", http.MethodPost, "/api/user/login", validBody, nil, http.StatusUnsupportedMediaType},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			for _, contentType := range tt.contentTypes {
+				request.Header.Add("Content-Type", contentType)
+			}
+			response := httptest.NewRecorder()
+
+			server.router.ServeHTTP(response, request)
+
+			assert.Equal(t, tt.status, response.Code)
+			if tt.status == http.StatusUnsupportedMediaType {
+				assert.Empty(t, response.Body.Bytes())
+			}
+		})
+	}
+}
+
 func TestRouter_MiddlewareRejectionsHaveEmptyBody(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -74,6 +154,12 @@ func TestRouter_MiddlewareRejectionsHaveEmptyBody(t *testing.T) {
 				"Content-Encoding": "gzip",
 			},
 			status: http.StatusBadRequest,
+		},
+		{
+			name:    "неподдерживаемый Content-Type",
+			body:    `{"login":"user","password":"password"}`,
+			headers: map[string]string{"Content-Type": "text/plain"},
+			status:  http.StatusUnsupportedMediaType,
 		},
 	}
 

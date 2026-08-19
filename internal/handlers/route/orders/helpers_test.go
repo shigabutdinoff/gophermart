@@ -27,8 +27,11 @@ func newRouter(logger *zap.Logger, deps Deps, userID int64, bodyLimit int64) htt
 		func(*http.Request, request.Extractor) (int64, error) { return userID, nil },
 	)
 	RegisterRoutes(api, logger, deps, Options{
-		BodyLimit:   bodyLimit,
-		Middlewares: huma.Middlewares{authorize},
+		BodyLimit: bodyLimit,
+		Middlewares: huma.Middlewares{
+			authorize,
+			apiconfig.AllowContentType("text/plain", ""),
+		},
 	})
 
 	return router

@@ -53,9 +53,11 @@ func (s *Server) registerAPI(router *chi.Mux) {
 	))
 	ordersroute.RegisterRoutes(api, s.logger, s.deps.orders, s.routeOptions(
 		authorization.Middleware(api, s.deps.tokenParser),
+		apiconfig.AllowContentType("text/plain", ""),
 	))
 	balanceroute.RegisterRoutes(api, s.logger, s.deps.balance, s.routeOptions(
 		authorization.Middleware(api, s.deps.tokenParser),
+		apiconfig.AllowContentType("application/json"),
 	))
 }
 

@@ -164,6 +164,9 @@ func TestRegister_InvalidRequestsStopBeforeAction(t *testing.T) {
 		body        string
 		status      int
 	}{
+		{"missing content type", "", `{"login":"user","password":"password"}`, http.StatusUnsupportedMediaType},
+		{"vendor json", "application/vnd.gophermart+json", `{"login":"user","password":"password"}`, http.StatusUnsupportedMediaType},
+		{"unsupported content type", "text/json", `{"login":"user","password":"password"}`, http.StatusUnsupportedMediaType},
 		{"malformed json", "application/json", `{"login":`, http.StatusBadRequest},
 		{"wrong field type", "application/json", `{"login":1,"password":"password"}`, http.StatusBadRequest},
 		{"missing field", "application/json", `{"login":"user"}`, http.StatusBadRequest},
@@ -177,7 +180,12 @@ func TestRegister_InvalidRequestsStopBeforeAction(t *testing.T) {
 			response := serveRegister(registerReturning(handlerTestToken, nil, &calls), tt.contentType, tt.body)
 
 			require.Equal(t, tt.status, response.Code)
-			assertProblem(t, response, tt.status, "")
+			if tt.status == http.StatusUnsupportedMediaType {
+				// тип тела отклоняет посредник до обработчика, тела у ответа нет
+				assert.Empty(t, response.Body.Bytes())
+			} else {
+				assertProblem(t, response, tt.status, "")
+			}
 			assert.Zero(t, calls)
 			assert.Empty(t, response.Header().Get("Authorization"))
 			assert.Empty(t, response.Header().Values("Set-Cookie"))
