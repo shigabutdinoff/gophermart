@@ -23,6 +23,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 )
 
 // Два сервера собраны без общего env-файла, поэтому получают разные секреты.
@@ -52,8 +53,8 @@ func TestIndependentSecretsInvalidateTokenAcrossServers(t *testing.T) {
 		`{"login":"ephemeral-user","password":"password"}`,
 	)
 	require.Equal(t, http.StatusOK, registration.Code)
-	authorization := registration.Header().Get("Authorization")
-	require.NotEmpty(t, authorization)
+	issued := registration.Header().Get("Authorization")
+	require.NotEmpty(t, issued)
 
 	second, err := newServer(
 		zap.NewNop(),
@@ -65,7 +66,7 @@ func TestIndependentSecretsInvalidateTokenAcrossServers(t *testing.T) {
 	require.NoError(t, err)
 	protected := func(server *Server) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, "/protected", http.NoBody)
-		request.Header.Set("Authorization", authorization)
+		request.Header.Set("Authorization", issued)
 		response := httptest.NewRecorder()
 		server.authorize(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -76,7 +77,7 @@ func TestIndependentSecretsInvalidateTokenAcrossServers(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, protected(first).Code)
 	afterRestart := protected(second)
 	assert.Equal(t, http.StatusUnauthorized, afterRestart.Code)
-	assert.Empty(t, afterRestart.Body.Bytes())
+	assert.Contains(t, afterRestart.Body.String(), authorization.MessageUnauthorized)
 }
 
 func TestRouterMissingAuthSchemaAfterMigrationFailureReturnsControlledError(t *testing.T) {
@@ -228,6 +229,8 @@ func newControllableDatabase(
 
 // registerMissingUserQuery заставляет поиск пользователя отвечать «не найден».
 // В DryRun запрос не выполняется, поэтому иначе поиск считался бы успешным.
+// Проверка существования учётной записи считает строки и отвечает утвердительно,
+// её отличает тип назначения, а Count поверх DryRun ещё смотрит на RowsAffected.
 func registerMissingUserQuery(t *testing.T, gormDB *gorm.DB, availability *atomic.Bool) {
 	t.Helper()
 
@@ -236,6 +239,11 @@ func registerMissingUserQuery(t *testing.T, gormDB *gorm.DB, availability *atomi
 		func(tx *gorm.DB) {
 			if availability != nil && !availability.Load() {
 				tx.AddError(errors.New("database is unavailable"))
+				return
+			}
+			if found, ok := tx.Statement.Dest.(*int64); ok {
+				*found = 1
+				tx.RowsAffected = 1
 				return
 			}
 			tx.AddError(gorm.ErrRecordNotFound)

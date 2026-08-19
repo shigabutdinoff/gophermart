@@ -20,9 +20,11 @@ func TestRepository_MissingCurrentDatabaseIsControlled(t *testing.T) {
 
 	_, createErr := repository.Create(context.Background(), "user", "hash")
 	_, findErr := repository.FindByLogin(context.Background(), "user")
+	_, existsErr := repository.Exists(context.Background(), 7)
 
 	require.ErrorIs(t, createErr, database.ErrUnavailable)
 	require.ErrorIs(t, findErr, database.ErrUnavailable)
+	require.ErrorIs(t, existsErr, database.ErrUnavailable)
 }
 
 func TestRepository_CreateUsesCurrentDatabaseAndContext(t *testing.T) {
@@ -119,6 +121,63 @@ func TestRepository_CreateMapsStorageError(t *testing.T) {
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
+}
+
+func TestRepository_ExistsCountsRowsOfUser(t *testing.T) {
+	tests := []struct {
+		name  string
+		found int64
+		want  bool
+	}{
+		{name: "учётная запись на месте", found: 1, want: true},
+		{name: "учётной записи больше нет"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gormDB := newDryRunDB(t)
+			ctx := context.WithValue(context.Background(), repositoryContextKey{}, "value")
+			var operationContext context.Context
+			var query string
+			var variables []any
+			require.NoError(t, gormDB.Callback().Query().After("gorm:query").Register(
+				"test:observe-count",
+				func(tx *gorm.DB) {
+					operationContext = tx.Statement.Context
+					query = tx.Statement.SQL.String()
+					variables = slices.Clone(tx.Statement.Vars)
+					// строки считает база, DryRun их не читает
+					found := tx.Statement.Dest.(*int64)
+					*found = tt.found
+					tx.RowsAffected = 1
+				},
+			))
+
+			exists, err := New(gormDB).Exists(ctx, 7)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, exists)
+			assert.Same(t, ctx, operationContext)
+			assert.Contains(t, query, "count(*)")
+			assert.Contains(t, query, `FROM "users"`)
+			assert.Contains(t, query, `WHERE id = $1`)
+			assert.Equal(t, []any{int64(7)}, variables)
+		})
+	}
+}
+
+func TestRepository_ExistsKeepsStorageError(t *testing.T) {
+	storageErr := errors.New("storage")
+	gormDB := newDryRunDB(t)
+	require.NoError(t, gormDB.Callback().Query().After("gorm:query").Register(
+		"test:count-error",
+		func(tx *gorm.DB) { tx.AddError(storageErr) },
+	))
+
+	exists, err := New(gormDB).Exists(context.Background(), 7)
+
+	assert.ErrorIs(t, err, storageErr)
+	assert.False(t, exists)
 }
 
 type repositoryContextKey struct{}

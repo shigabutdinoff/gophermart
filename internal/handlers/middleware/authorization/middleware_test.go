@@ -2,6 +2,7 @@ package authorization
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,9 @@ import (
 	"github.com/golang-jwt/jwt/v5/request"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
 )
@@ -26,7 +30,33 @@ type middlewareResult struct {
 	contextHasID  bool
 }
 
+// stubUsers отвечает за хранилище учётных записей заданным исходом.
+type stubUsers struct {
+	exists bool
+	err    error
+	calls  int
+	userID int64
+}
+
+func (s *stubUsers) Exists(_ context.Context, userID int64) (bool, error) {
+	s.calls++
+	s.userID = userID
+
+	return s.exists, s.err
+}
+
 func serveAuthorized(t *testing.T, configure func(*http.Request)) middlewareResult {
+	t.Helper()
+
+	return serveAuthorizedWith(t, zap.NewNop(), &stubUsers{exists: true}, configure)
+}
+
+func serveAuthorizedWith(
+	t *testing.T,
+	logger *zap.Logger,
+	users UserChecker,
+	configure func(*http.Request),
+) middlewareResult {
 	t.Helper()
 
 	r := httptest.NewRequest(http.MethodGet, "/protected", http.NoBody)
@@ -42,7 +72,7 @@ func serveAuthorized(t *testing.T, configure func(*http.Request)) middlewareResu
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	Middleware(testManager(t).ParseRequest)(next).ServeHTTP(response, r)
+	Middleware(logger, testManager(t).ParseRequest, users)(next).ServeHTTP(response, r)
 
 	return result
 }
@@ -84,9 +114,7 @@ func TestMiddleware_RejectsInvalidSelectedBearerWithoutCookieFallback(t *testing
 		})
 	})
 
-	assert.Equal(t, http.StatusUnauthorized, result.response.Code)
-	assert.Empty(t, result.response.Body.Bytes())
-	assert.Zero(t, result.nextCalls)
+	assertUnauthorized(t, result)
 }
 
 func TestMiddleware_FallsBackToCookieWhenBearerIsAbsentOrUnrecognized(t *testing.T) {
@@ -183,13 +211,16 @@ func TestMiddleware_UsesFirstAuthorizationValue(t *testing.T) {
 				}
 			})
 
+			if tt.wantStatus == http.StatusUnauthorized {
+				assertUnauthorized(t, result)
+				return
+			}
+
 			assert.Equal(t, tt.wantStatus, result.response.Code)
 			assert.Empty(t, result.response.Body.Bytes())
 			assert.Equal(t, tt.wantNext, result.nextCalls)
-			if tt.wantNext > 0 {
-				assert.Equal(t, tt.wantUserID, result.contextUserID)
-				assert.True(t, result.contextHasID)
-			}
+			assert.Equal(t, tt.wantUserID, result.contextUserID)
+			assert.True(t, result.contextHasID)
 		})
 	}
 }
@@ -298,13 +329,46 @@ func TestMiddleware_RejectsMissingInvalidOrNonpositiveCredentials(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := serveAuthorized(t, tt.configure)
+			users := &stubUsers{exists: true}
 
-			assert.Equal(t, http.StatusUnauthorized, result.response.Code)
-			assert.Empty(t, result.response.Body.Bytes())
-			assert.Zero(t, result.nextCalls)
+			result := serveAuthorizedWith(t, zap.NewNop(), users, tt.configure)
+
+			assertUnauthorized(t, result)
+			assert.Zero(t, users.calls)
 		})
 	}
+}
+
+func TestMiddleware_RejectsTokenOfMissingUser(t *testing.T) {
+	users := &stubUsers{}
+
+	result := serveAuthorizedWith(t, zap.NewNop(), users, func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+issuedToken(t, 7))
+	})
+
+	assertUnauthorized(t, result)
+	assert.Equal(t, 1, users.calls)
+	assert.Equal(t, int64(7), users.userID)
+}
+
+func TestMiddleware_AnswersInternalErrorWhenCheckFails(t *testing.T) {
+	core, logs := observer.New(zapcore.ErrorLevel)
+	users := &stubUsers{err: errors.New("database is unavailable")}
+
+	result := serveAuthorizedWith(t, zap.New(core), users, func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+issuedToken(t, 7))
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, result.response.Code)
+	assert.Equal(
+		t,
+		"application/problem+json",
+		result.response.Header().Get("Content-Type"),
+	)
+	assert.Contains(t, result.response.Body.String(), MessageInternalError)
+	assert.Zero(t, result.nextCalls)
+	require.Equal(t, 1, logs.Len())
+	assert.Contains(t, logs.All()[0].ContextMap()["error"], "database is unavailable")
 }
 
 func TestMiddleware_StoresUserIDWithoutTouchingOriginalRequest(t *testing.T) {
@@ -335,7 +399,7 @@ func TestMiddleware_CallsParserOnceWithOrderedExtractor(t *testing.T) {
 	nextCalls := 0
 	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { nextCalls++ })
 
-	Middleware(parser)(next).ServeHTTP(w, r)
+	Middleware(zap.NewNop(), parser, &stubUsers{exists: true})(next).ServeHTTP(w, r)
 
 	assert.Equal(t, 1, parserCalls)
 	assert.Equal(t, "selected", selected)
@@ -393,6 +457,24 @@ func TestUserID_ReturnsOnlyPositiveTypedValue(t *testing.T) {
 			assert.Equal(t, tt.ok, ok)
 		})
 	}
+}
+
+// assertUnauthorized ждёт отказ в том же формате, что отдают хендлеры huma.
+func assertUnauthorized(t *testing.T, result middlewareResult) {
+	t.Helper()
+
+	assert.Equal(t, http.StatusUnauthorized, result.response.Code)
+	assert.Equal(
+		t,
+		"application/problem+json",
+		result.response.Header().Get("Content-Type"),
+	)
+	assert.JSONEq(
+		t,
+		`{"title":"Unauthorized","status":401,"detail":"`+MessageUnauthorized+`"}`,
+		result.response.Body.String(),
+	)
+	assert.Zero(t, result.nextCalls)
 }
 
 func testSecret() []byte {

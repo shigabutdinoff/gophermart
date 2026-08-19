@@ -71,7 +71,7 @@ func newServer(
 		shutdownTimeout: DefaultShutdownTimeout,
 		sqlDB:           sqlDB,
 		authDeps:        authentication.Deps{Register: registration.Register, Login: login.Login},
-		authorize:       authorization.Middleware(tokens.ParseRequest),
+		authorize:       authorization.Middleware(logger, tokens.ParseRequest, users),
 		Config:          cfg,
 	}
 	server.setupRoutes()
