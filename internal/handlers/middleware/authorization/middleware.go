@@ -9,24 +9,20 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/golang-jwt/jwt/v5/request"
 	"go.uber.org/zap"
+
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
 
 // SessionCookieName называет cookie с тем же токеном, что и заголовок Bearer.
 const SessionCookieName = "gophermart_session"
 
-// Тексты отказов посредника.
-const (
-	MessageUnauthorized  = "Пользователь не аутентифицирован"
-	MessageInternalError = "Внутренняя ошибка сервиса"
-)
-
 // Тела отказов в формате ошибок huma готовятся на старте
 var (
 	unauthorizedBody = mustMarshal(
-		huma.NewError(http.StatusUnauthorized, MessageUnauthorized),
+		huma.NewError(http.StatusUnauthorized, message.Unauthorized),
 	)
 	internalBody = mustMarshal(
-		huma.NewError(http.StatusInternalServerError, MessageInternalError),
+		huma.NewError(http.StatusInternalServerError, message.Internal),
 	)
 )
 

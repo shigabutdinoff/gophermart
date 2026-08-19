@@ -23,6 +23,7 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/auth"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
 
 // registerHandler собирает маршрут регистрации так же, как это делает сервер.
@@ -145,7 +146,7 @@ func TestRegisterFailuresDoNotPersistUserOrReturnToken(t *testing.T) {
 			assert.Contains(
 				t,
 				response.Body.String(),
-				authentication.MessageInternalError,
+				message.Internal,
 			)
 			assert.Empty(t, response.Header().Get("Authorization"))
 			assert.Empty(t, response.Header().Values("Set-Cookie"))

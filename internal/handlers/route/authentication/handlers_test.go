@@ -22,6 +22,7 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/auth"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
 
 var handlerTestToken = auth.IssuedToken{
@@ -145,7 +146,7 @@ func TestHandlersLogInternalErrors(t *testing.T) {
 
 			response := tt.run(zap.New(core), errors.New("create user: storage is down"))
 
-			assertProblem(t, response, http.StatusInternalServerError, MessageInternalError)
+			assertProblem(t, response, http.StatusInternalServerError, message.Internal)
 			require.Equal(t, 1, logs.Len())
 			entry := logs.All()[0]
 			assert.Equal(t, zapcore.ErrorLevel, entry.Level)
@@ -333,7 +334,7 @@ func TestRegister_MapsErrorsWithoutToken(t *testing.T) {
 		message string
 	}{
 		{"login taken", auth.ErrLoginTaken, http.StatusConflict, MessageLoginTaken},
-		{"internal", errors.New("storage"), http.StatusInternalServerError, MessageInternalError},
+		{"internal", errors.New("storage"), http.StatusInternalServerError, message.Internal},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -358,7 +359,7 @@ func TestLogin_MapsAllOutcomes(t *testing.T) {
 	}{
 		{"success", handlerTestToken, nil, http.StatusOK, ""},
 		{"invalid", auth.IssuedToken{}, auth.ErrInvalidCredentials, http.StatusUnauthorized, MessageInvalidCredentials},
-		{"internal", auth.IssuedToken{}, errors.New("storage"), http.StatusInternalServerError, MessageInternalError},
+		{"internal", auth.IssuedToken{}, errors.New("storage"), http.StatusInternalServerError, message.Internal},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

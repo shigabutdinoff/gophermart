@@ -23,7 +23,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
-	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
 
 // Два сервера собраны без общего env-файла, поэтому получают разные секреты.
@@ -77,7 +77,7 @@ func TestIndependentSecretsInvalidateTokenAcrossServers(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, protected(first).Code)
 	afterRestart := protected(second)
 	assert.Equal(t, http.StatusUnauthorized, afterRestart.Code)
-	assert.Contains(t, afterRestart.Body.String(), authorization.MessageUnauthorized)
+	assert.Contains(t, afterRestart.Body.String(), message.Unauthorized)
 }
 
 func TestRouterMissingAuthSchemaAfterMigrationFailureReturnsControlledError(t *testing.T) {

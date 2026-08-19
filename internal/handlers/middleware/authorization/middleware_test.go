@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
 
 var middlewareTestNow = time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
@@ -365,7 +366,7 @@ func TestMiddleware_AnswersInternalErrorWhenCheckFails(t *testing.T) {
 		"application/problem+json",
 		result.response.Header().Get("Content-Type"),
 	)
-	assert.Contains(t, result.response.Body.String(), MessageInternalError)
+	assert.Contains(t, result.response.Body.String(), message.Internal)
 	assert.Zero(t, result.nextCalls)
 	require.Equal(t, 1, logs.Len())
 	assert.Contains(t, logs.All()[0].ContextMap()["error"], "database is unavailable")
@@ -471,7 +472,7 @@ func assertUnauthorized(t *testing.T, result middlewareResult) {
 	)
 	assert.JSONEq(
 		t,
-		`{"title":"Unauthorized","status":401,"detail":"`+MessageUnauthorized+`"}`,
+		`{"title":"Unauthorized","status":401,"detail":"`+message.Unauthorized+`"}`,
 		result.response.Body.String(),
 	)
 	assert.Zero(t, result.nextCalls)

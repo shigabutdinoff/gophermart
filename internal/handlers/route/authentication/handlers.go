@@ -14,13 +14,13 @@ import (
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
 
 // Тексты ответов маршрутов аутентификации.
 const (
 	MessageLoginTaken         = "Логин уже занят"
 	MessageInvalidCredentials = "Неверная пара логин/пароль"
-	MessageInternalError      = "Внутренняя ошибка сервиса"
 	MessageNullCharacter      = "Логин содержит недопустимый символ"
 	MessageEmptyLogin         = "Логин не может быть пустым"
 	MessageLongLogin          = "Логин слишком длинный"
@@ -171,7 +171,7 @@ func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps) {
 			return nil, huma.Error409Conflict(MessageLoginTaken)
 		default:
 			logger.Error("Не удалось зарегистрировать пользователя", zap.Error(err))
-			return nil, huma.Error500InternalServerError(MessageInternalError)
+			return nil, huma.Error500InternalServerError(message.Internal)
 		}
 	})
 
@@ -196,7 +196,7 @@ func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps) {
 			return nil, huma.Error401Unauthorized(MessageInvalidCredentials)
 		default:
 			logger.Error("Не удалось выполнить вход пользователя", zap.Error(err))
-			return nil, huma.Error500InternalServerError(MessageInternalError)
+			return nil, huma.Error500InternalServerError(message.Internal)
 		}
 	})
 }
