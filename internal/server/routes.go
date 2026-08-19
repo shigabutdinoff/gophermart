@@ -41,7 +41,7 @@ func (s *Server) installMiddleware(router *chi.Mux) {
 	router.Use(middleware.Heartbeat(healthcheck.LivePath))
 	router.Use(middleware.Compress(gzip.DefaultCompression))
 	router.Use(middleware.AllowContentEncoding(decompress.Encodings...))
-	router.Use(middleware.RequestSize(s.requestBodyLimit + 2))
+	router.Use(middleware.RequestSize(apiconfig.RouterLimit(s.requestBodyLimit)))
 	router.Use(decompress.Gzip)
 }
 
