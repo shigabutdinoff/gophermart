@@ -15,7 +15,7 @@ func TestRouteHelpersRegisterOnlyOwnMethod(t *testing.T) {
 	t.Run("загрузка", func(t *testing.T) {
 		api := apiconfig.NewAPI(chi.NewRouter())
 
-		registerUploadRoute(api, zap.NewNop(), nil, Options{})
+		registerUploadRoute(api, zap.NewNop(), nil, Options{BodyLimit: testBodyLimit})
 
 		path := api.OpenAPI().Paths[ordersPath]
 		require.NotNil(t, path)
@@ -26,7 +26,7 @@ func TestRouteHelpersRegisterOnlyOwnMethod(t *testing.T) {
 	t.Run("список", func(t *testing.T) {
 		api := apiconfig.NewAPI(chi.NewRouter())
 
-		registerListRoute(api, zap.NewNop(), nil, Options{})
+		registerListRoute(api, zap.NewNop(), nil, Options{BodyLimit: testBodyLimit})
 
 		path := api.OpenAPI().Paths[ordersPath]
 		require.NotNil(t, path)

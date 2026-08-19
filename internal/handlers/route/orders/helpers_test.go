@@ -19,7 +19,7 @@ const (
 )
 
 // newRouter собирает маршруты так же, как это делает сервер.
-func newRouter(logger *zap.Logger, deps Deps, userID int64) http.Handler {
+func newRouter(logger *zap.Logger, deps Deps, userID int64, bodyLimit int64) http.Handler {
 	router := chi.NewRouter()
 	api := apiconfig.NewAPI(router)
 	authorize := authorization.Middleware(
@@ -27,6 +27,7 @@ func newRouter(logger *zap.Logger, deps Deps, userID int64) http.Handler {
 		func(*http.Request, request.Extractor) (int64, error) { return userID, nil },
 	)
 	RegisterRoutes(api, logger, deps, Options{
+		BodyLimit:   bodyLimit,
 		Middlewares: huma.Middlewares{authorize},
 	})
 
@@ -36,7 +37,7 @@ func newRouter(logger *zap.Logger, deps Deps, userID int64) http.Handler {
 // newUnprotectedRouter публикует маршруты без посредника авторизации.
 func newUnprotectedRouter(deps Deps) http.Handler {
 	router := chi.NewRouter()
-	RegisterRoutes(apiconfig.NewAPI(router), zap.NewNop(), deps, Options{})
+	RegisterRoutes(apiconfig.NewAPI(router), zap.NewNop(), deps, Options{BodyLimit: testBodyLimit})
 
 	return router
 }

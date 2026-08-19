@@ -57,5 +57,8 @@ func (s *Server) registerAPI(router *chi.Mux) {
 }
 
 func (s *Server) routeOptions(middlewares ...func(huma.Context, func(huma.Context))) route.Options {
-	return route.Options{Middlewares: middlewares}
+	return route.Options{
+		BodyLimit:   s.requestBodyLimit,
+		Middlewares: middlewares,
+	}
 }

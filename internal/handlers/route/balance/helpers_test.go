@@ -12,7 +12,10 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 )
 
-const testUserID = 42
+const (
+	testUserID          = 42
+	testBodyLimit int64 = 1 << 20
+)
 
 func newRouter(logger *zap.Logger, deps Deps) http.Handler {
 	router := chi.NewRouter()
@@ -21,7 +24,7 @@ func newRouter(logger *zap.Logger, deps Deps) http.Handler {
 		api,
 		func(*http.Request, request.Extractor) (int64, error) { return testUserID, nil },
 	)
-	RegisterRoutes(api, logger, deps, Options{Middlewares: huma.Middlewares{
+	RegisterRoutes(api, logger, deps, Options{BodyLimit: testBodyLimit, Middlewares: huma.Middlewares{
 		authorize,
 	}})
 
@@ -30,7 +33,7 @@ func newRouter(logger *zap.Logger, deps Deps) http.Handler {
 
 func newUnprotectedRouter(logger *zap.Logger, deps Deps) http.Handler {
 	router := chi.NewRouter()
-	RegisterRoutes(apiconfig.NewAPI(router), logger, deps, Options{})
+	RegisterRoutes(apiconfig.NewAPI(router), logger, deps, Options{BodyLimit: testBodyLimit})
 
 	return router
 }

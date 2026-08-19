@@ -144,6 +144,7 @@ func registerWithdrawRoute(
 		Summary:       "Списание баллов в счёт оплаты заказа",
 		Metadata:      apiconfig.ValidationErrorsAsBadRequest(),
 		DefaultStatus: http.StatusOK,
+		MaxBodyBytes:  options.MaxBody(),
 		Middlewares:   options.Middlewares,
 		Errors: []int{
 			http.StatusBadRequest,

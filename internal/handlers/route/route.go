@@ -7,6 +7,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/zap"
 
+	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
 
@@ -15,7 +16,13 @@ const jsonContentType = "application/json"
 
 // Options задаёт параметры публикации маршрутов.
 type Options struct {
+	BodyLimit   int64
 	Middlewares huma.Middlewares
+}
+
+// MaxBody переводит общий предел тела в границу операции huma.
+func (o Options) MaxBody() int64 {
+	return apiconfig.MaxBodyBytes(o.BodyLimit)
 }
 
 // InternalError записывает причину в журнал и отдаёт клиенту общий текст.

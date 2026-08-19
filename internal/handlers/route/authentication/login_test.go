@@ -15,7 +15,7 @@ import (
 
 func TestLogin_UnknownLoginAndWrongPasswordShareBody(t *testing.T) {
 	deps := loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials)
-	handler := newRouter(zap.NewNop(), deps)
+	handler := newRouter(zap.NewNop(), deps, testBodyLimit)
 
 	bodies := make([]string, 0, 2)
 	for _, login := range []string{"unknown", "known"} {

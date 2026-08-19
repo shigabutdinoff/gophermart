@@ -50,7 +50,7 @@ func TestListReturnsOrdersOfUser(t *testing.T) {
 		{Number: testNumber, Status: order.StatusNew, UploadedAt: newer.Add(-3 * time.Hour)},
 	}, nil, &userID)
 
-	response := serveList(newRouter(zap.NewNop(), deps, testUserID))
+	response := serveList(newRouter(zap.NewNop(), deps, testUserID, testBodyLimit))
 
 	require.Equal(t, http.StatusOK, response.Code)
 	assert.Equal(t, "application/json", response.Header().Get("Content-Type"))
@@ -91,7 +91,7 @@ func TestListReturnsAccrual(t *testing.T) {
 		{Number: testNumber, Status: order.StatusNew, UploadedAt: uploadedAt},
 	}, nil, nil)
 
-	response := serveList(newRouter(zap.NewNop(), deps, testUserID))
+	response := serveList(newRouter(zap.NewNop(), deps, testUserID, testBodyLimit))
 
 	require.Equal(t, http.StatusOK, response.Code)
 	var body []map[string]any
@@ -106,7 +106,7 @@ func TestListReturnsAccrual(t *testing.T) {
 func TestListAnswersWithoutData(t *testing.T) {
 	deps := listReturning(nil, nil, nil)
 
-	response := serveList(newRouter(zap.NewNop(), deps, testUserID))
+	response := serveList(newRouter(zap.NewNop(), deps, testUserID, testBodyLimit))
 
 	assert.Equal(t, http.StatusNoContent, response.Code)
 	assert.Empty(t, response.Body.String())
@@ -121,7 +121,7 @@ func TestListPassesFilterWithUnknownBodyLength(t *testing.T) {
 	req.TransferEncoding = []string{"chunked"}
 	response := httptest.NewRecorder()
 
-	newRouter(zap.NewNop(), deps, testUserID).ServeHTTP(response, req)
+	newRouter(zap.NewNop(), deps, testUserID, testBodyLimit).ServeHTTP(response, req)
 
 	assert.Equal(t, http.StatusNoContent, response.Code)
 }
@@ -149,7 +149,7 @@ func TestListRequiresAuthenticatedUser(t *testing.T) {
 		return nil, nil
 	}}
 
-	response := serveList(newRouter(zap.NewNop(), deps, 0))
+	response := serveList(newRouter(zap.NewNop(), deps, 0, testBodyLimit))
 
 	assert.Equal(t, http.StatusUnauthorized, response.Code)
 	assert.Zero(t, calls)
@@ -159,7 +159,7 @@ func TestListLogsInternalError(t *testing.T) {
 	core, logs := observer.New(zapcore.ErrorLevel)
 	deps := listReturning(nil, errors.New("storage is down"), nil)
 
-	response := serveList(newRouter(zap.New(core), deps, testUserID))
+	response := serveList(newRouter(zap.New(core), deps, testUserID, testBodyLimit))
 
 	require.Equal(t, http.StatusInternalServerError, response.Code)
 	assert.Contains(t, response.Body.String(), message.Internal)

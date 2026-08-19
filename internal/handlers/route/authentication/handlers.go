@@ -66,6 +66,7 @@ func registerRegistrationRoute(api huma.API, logger *zap.Logger, register Creden
 		Metadata:    apiconfig.ValidationErrorsAsBadRequest(),
 		// пустое тело успеха не должно превращаться в 204
 		DefaultStatus: http.StatusOK,
+		MaxBodyBytes:  options.MaxBody(),
 		Middlewares:   options.Middlewares,
 		Errors: []int{
 			http.StatusBadRequest,
@@ -95,6 +96,7 @@ func registerLoginRoute(api huma.API, logger *zap.Logger, login CredentialsFunc,
 		Summary:       "Вход пользователя",
 		Metadata:      apiconfig.ValidationErrorsAsBadRequest(),
 		DefaultStatus: http.StatusOK,
+		MaxBodyBytes:  options.MaxBody(),
 		Middlewares:   options.Middlewares,
 		Errors: []int{
 			http.StatusBadRequest,

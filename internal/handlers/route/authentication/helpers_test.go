@@ -18,6 +18,8 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 )
 
+const testBodyLimit = 1 << 20
+
 var handlerTestToken = auth.IssuedToken{
 	Value:     "signed-token",
 	IssuedAt:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
@@ -25,10 +27,10 @@ var handlerTestToken = auth.IssuedToken{
 }
 
 // newRouter собирает маршруты так же, как это делает сервер.
-func newRouter(logger *zap.Logger, deps Deps) http.Handler {
+func newRouter(logger *zap.Logger, deps Deps, bodyLimit int64) http.Handler {
 	router := chi.NewRouter()
 	api := apiconfig.NewAPI(router)
-	RegisterRoutes(api, logger, deps, Options{})
+	RegisterRoutes(api, logger, deps, Options{BodyLimit: bodyLimit})
 
 	return router
 }
@@ -46,11 +48,11 @@ func serve(handler http.Handler, path, contentType, body string) *httptest.Respo
 }
 
 func serveRegister(deps Deps, contentType, body string) *httptest.ResponseRecorder {
-	return serve(newRouter(zap.NewNop(), deps), registerPath, contentType, body)
+	return serve(newRouter(zap.NewNop(), deps, testBodyLimit), registerPath, contentType, body)
 }
 
 func serveLogin(deps Deps, contentType, body string) *httptest.ResponseRecorder {
-	return serve(newRouter(zap.NewNop(), deps), loginPath, contentType, body)
+	return serve(newRouter(zap.NewNop(), deps, testBodyLimit), loginPath, contentType, body)
 }
 
 // registerReturning собирает зависимости регистрации с заданным исходом.

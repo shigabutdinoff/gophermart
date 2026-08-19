@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
@@ -27,6 +28,36 @@ func TestRegister_RejectsDataAfterJSONObject(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, response.Code)
 	assert.Zero(t, calls)
+}
+
+func TestRegister_OversizedBodyAnswers413(t *testing.T) {
+	const limit = 64
+	calls := 0
+	deps := registerReturning(handlerTestToken, nil, &calls)
+	body := `{"login":"user","password":"password"}` + strings.Repeat(" ", limit)
+
+	response := serve(
+		newRouter(zap.NewNop(), deps, limit),
+		registerPath, "application/json", body,
+	)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+	assert.Zero(t, calls)
+}
+
+// Тело ровно в границу лимита проходит, 413 даёт только превышение.
+func TestRegister_BodyAtLimitPasses(t *testing.T) {
+	body := `{"login":"user","password":"password"}`
+	calls := 0
+	deps := registerReturning(handlerTestToken, nil, &calls)
+
+	response := serve(
+		newRouter(zap.NewNop(), deps, int64(len(body))),
+		registerPath, "application/json", body,
+	)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, 1, calls)
 }
 
 func TestRegister_NamesViolatedCredentialsField(t *testing.T) {

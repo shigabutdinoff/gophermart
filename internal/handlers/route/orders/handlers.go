@@ -85,6 +85,7 @@ func registerUploadRoute(
 		Summary:     "Загрузка номера заказа",
 		// новый номер принят в обработку, повтор своего понижает статус
 		DefaultStatus:   http.StatusAccepted,
+		MaxBodyBytes:    options.MaxBody(),
 		BodyReadTimeout: bodyReadTimeout,
 		Middlewares:     options.Middlewares,
 		Errors: []int{

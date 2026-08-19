@@ -36,7 +36,7 @@ func registerHandler(register authentication.CredentialsFunc) http.Handler {
 		api,
 		zap.NewNop(),
 		authentication.Deps{Register: register},
-		authentication.Options{},
+		authentication.Options{BodyLimit: 1 << 20},
 	)
 
 	return router

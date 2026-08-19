@@ -26,7 +26,7 @@ func TestHandlersLogInternalErrors(t *testing.T) {
 			name: "register",
 			run: func(logger *zap.Logger, err error) *httptest.ResponseRecorder {
 				deps := registerReturning(auth.IssuedToken{}, err, nil)
-				return serve(newRouter(logger, deps),
+				return serve(newRouter(logger, deps, testBodyLimit),
 					registerPath, "application/json",
 					`{"login":"user","password":"password"}`)
 			},
@@ -35,7 +35,7 @@ func TestHandlersLogInternalErrors(t *testing.T) {
 			name: "login",
 			run: func(logger *zap.Logger, err error) *httptest.ResponseRecorder {
 				deps := loginReturning(auth.IssuedToken{}, err)
-				return serve(newRouter(logger, deps),
+				return serve(newRouter(logger, deps, testBodyLimit),
 					loginPath, "application/json",
 					`{"login":"user","password":"password"}`)
 			},
@@ -62,11 +62,11 @@ func TestHandlersDoNotLogClientErrors(t *testing.T) {
 	logger := zap.New(core)
 
 	serve(
-		newRouter(logger, registerReturning(auth.IssuedToken{}, auth.ErrLoginTaken, nil)),
+		newRouter(logger, registerReturning(auth.IssuedToken{}, auth.ErrLoginTaken, nil), testBodyLimit),
 		registerPath, "application/json", `{"login":"user","password":"password"}`,
 	)
 	serve(
-		newRouter(logger, loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials)),
+		newRouter(logger, loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials), testBodyLimit),
 		loginPath, "application/json", `{"login":"user","password":"password"}`,
 	)
 
@@ -101,7 +101,7 @@ func TestRoutes_StatusesStayWithinSpecification(t *testing.T) {
 					return handlerTestToken, nil
 				},
 			}
-			response := serve(newRouter(zap.NewNop(), deps), path, "application/json", body)
+			response := serve(newRouter(zap.NewNop(), deps, testBodyLimit), path, "application/json", body)
 
 			assert.True(t, allowed[response.Code],
 				"%s с телом %s ответил %d вне контракта ТЗ", path, body, response.Code)
@@ -111,7 +111,7 @@ func TestRoutes_StatusesStayWithinSpecification(t *testing.T) {
 
 // Служебные маршруты фреймворка наружу не публикуются.
 func TestRoutes_NoFrameworkServiceEndpoints(t *testing.T) {
-	handler := newRouter(zap.NewNop(), registerReturning(handlerTestToken, nil, nil))
+	handler := newRouter(zap.NewNop(), registerReturning(handlerTestToken, nil, nil), testBodyLimit)
 
 	for _, path := range []string{"/openapi.json", "/openapi.yaml", "/docs", "/schemas/ErrorModel.json"} {
 		t.Run(path, func(t *testing.T) {

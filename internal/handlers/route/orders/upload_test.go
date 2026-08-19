@@ -89,7 +89,7 @@ func TestUploadAnswersBySpecification(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			deps := uploadReturning(test.uploadErr, nil, nil)
-			router := newRouter(zap.NewNop(), deps, testUserID)
+			router := newRouter(zap.NewNop(), deps, testUserID, testBodyLimit)
 
 			response := serveUpload(router, "text/plain", testNumber)
 
@@ -111,7 +111,7 @@ func TestUploadRejectsEmptyBody(t *testing.T) {
 		calls++
 		return nil
 	}}
-	router := newRouter(zap.NewNop(), deps, testUserID)
+	router := newRouter(zap.NewNop(), deps, testUserID, testBodyLimit)
 
 	response := serveUpload(router, "text/plain", "")
 
@@ -124,7 +124,7 @@ func TestUploadPassesRawBodyAndUser(t *testing.T) {
 	var number string
 	var userID int64
 	deps := uploadReturning(nil, &number, &userID)
-	router := newRouter(zap.NewNop(), deps, testUserID)
+	router := newRouter(zap.NewNop(), deps, testUserID, testBodyLimit)
 
 	response := serveUpload(router, "text/plain", " "+testNumber+"\n")
 
@@ -136,7 +136,7 @@ func TestUploadPassesRawBodyAndUser(t *testing.T) {
 func TestUploadAcceptsBodyWithoutContentType(t *testing.T) {
 	var number string
 	deps := uploadReturning(nil, &number, nil)
-	router := newRouter(zap.NewNop(), deps, testUserID)
+	router := newRouter(zap.NewNop(), deps, testUserID, testBodyLimit)
 
 	response := serveUpload(router, "", testNumber)
 
@@ -146,16 +146,17 @@ func TestUploadAcceptsBodyWithoutContentType(t *testing.T) {
 
 func TestUploadKeepsBodyReadDeadline(t *testing.T) {
 	api := apiconfig.NewAPI(chi.NewRouter())
-	RegisterRoutes(api, zap.NewNop(), Deps{}, Options{})
+	RegisterRoutes(api, zap.NewNop(), Deps{}, Options{BodyLimit: testBodyLimit})
 
 	operation := api.OpenAPI().Paths[ordersPath].Post
 
 	assert.Equal(t, bodyReadTimeout, operation.BodyReadTimeout)
+	assert.Equal(t, apiconfig.MaxBodyBytes(testBodyLimit), operation.MaxBodyBytes)
 }
 
 func TestUploadOperationDoesNotAdvertiseNotFound(t *testing.T) {
 	api := apiconfig.NewAPI(chi.NewRouter())
-	RegisterRoutes(api, zap.NewNop(), Deps{}, Options{})
+	RegisterRoutes(api, zap.NewNop(), Deps{}, Options{BodyLimit: testBodyLimit})
 
 	operation := api.OpenAPI().Paths[ordersPath].Post
 
@@ -178,10 +179,53 @@ func TestUploadRejectsRequestWithoutUser(t *testing.T) {
 	assert.Zero(t, calls)
 }
 
+func TestUploadRejectsRequestBeforeService(t *testing.T) {
+	tests := []struct {
+		name        string
+		userID      int64
+		contentType string
+		body        string
+		bodyLimit   int64
+		wantStatus  int
+	}{
+		{
+			name:        "без пользователя",
+			contentType: "text/plain",
+			body:        testNumber,
+			bodyLimit:   testBodyLimit,
+			wantStatus:  http.StatusUnauthorized,
+		},
+		{
+			name:        "тело больше лимита",
+			userID:      testUserID,
+			contentType: "text/plain",
+			body:        strings.Repeat("1", 32),
+			bodyLimit:   8,
+			wantStatus:  http.StatusRequestEntityTooLarge,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			deps := Deps{Upload: func(context.Context, string, int64) error {
+				calls++
+				return nil
+			}}
+			router := newRouter(zap.NewNop(), deps, test.userID, test.bodyLimit)
+
+			response := serveUpload(router, test.contentType, test.body)
+
+			assert.Equal(t, test.wantStatus, response.Code)
+			assert.Zero(t, calls)
+		})
+	}
+}
+
 func TestUploadLogsInternalError(t *testing.T) {
 	core, logs := observer.New(zapcore.ErrorLevel)
 	deps := uploadReturning(errors.New("storage is down"), nil, nil)
-	router := newRouter(zap.New(core), deps, testUserID)
+	router := newRouter(zap.New(core), deps, testUserID, testBodyLimit)
 
 	response := serveUpload(router, "text/plain", testNumber)
 
