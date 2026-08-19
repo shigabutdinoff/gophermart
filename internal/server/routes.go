@@ -7,6 +7,7 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/logging"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
+	ordersroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/orders"
 )
 
 func (s *Server) setupRoutes() {
@@ -14,7 +15,8 @@ func (s *Server) setupRoutes() {
 
 	router.Use(logging.WithLogging(s.logger))
 	api := humachi.New(router, apiconfig.New())
-	authentication.RegisterRoutes(api, s.logger, s.authDeps)
+	authentication.RegisterRoutes(api, s.logger, s.authDeps, nil)
+	ordersroute.RegisterRoutes(api, s.logger, s.orderDeps, apiconfig.FromHTTP(s.authorize))
 
 	s.router = router
 }

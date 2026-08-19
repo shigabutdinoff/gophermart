@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -13,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
@@ -117,45 +117,17 @@ type authOutput struct {
 	SetCookie     http.Cookie `header:"Set-Cookie"`
 }
 
-// specStatusPaths собирает пути, для которых ТЗ задаёт перечень статусов.
-var specStatusPaths sync.Map
-
-// useSpecStatuses понижает 422 до 400 только на путях этого пакета.
-// ТЗ допускает для аутентификации лишь 200, 400, 401, 409 и 500,
-// а другим маршрутам 422 положен, например номеру заказа неверного формата.
-var useSpecStatuses = sync.OnceFunc(func() {
-	next := huma.NewErrorWithContext
-	huma.NewErrorWithContext = func(
-		ctx huma.Context,
-		status int,
-		msg string,
-		errs ...error,
-	) huma.StatusError {
-		if status == http.StatusUnprocessableEntity && ctx != nil {
-			if operation := ctx.Operation(); operation != nil {
-				if _, ok := specStatusPaths.Load(operation.Path); ok {
-					status = http.StatusBadRequest
-				}
-			}
-		}
-
-		return next(ctx, status, msg, errs...)
-	}
-})
-
 // RegisterRoutes публикует маршруты аутентификации как huma-операции.
-func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps) {
-	useSpecStatuses()
-	specStatusPaths.Store(registerPath, struct{}{})
-	specStatusPaths.Store(loginPath, struct{}{})
-
+func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps, middlewares huma.Middlewares) {
 	huma.Register(api, huma.Operation{
 		OperationID: "register-user",
 		Method:      http.MethodPost,
 		Path:        registerPath,
 		Summary:     "Регистрация пользователя",
+		Metadata:    apiconfig.ValidationErrorsAsBadRequest(),
 		// пустое тело успеха не должно превращаться в 204
 		DefaultStatus: http.StatusOK,
+		Middlewares:   middlewares,
 		Errors: []int{
 			http.StatusBadRequest,
 			http.StatusConflict,
@@ -180,7 +152,9 @@ func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps) {
 		Method:        http.MethodPost,
 		Path:          loginPath,
 		Summary:       "Вход пользователя",
+		Metadata:      apiconfig.ValidationErrorsAsBadRequest(),
 		DefaultStatus: http.StatusOK,
+		Middlewares:   middlewares,
 		Errors: []int{
 			http.StatusBadRequest,
 			http.StatusUnauthorized,

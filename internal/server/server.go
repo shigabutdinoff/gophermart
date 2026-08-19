@@ -14,6 +14,9 @@ import (
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
+	ordersroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/orders"
+	"github.com/shigabutdinoff/gophermart/internal/order"
+	orderrepository "github.com/shigabutdinoff/gophermart/internal/repository/order"
 	userrepository "github.com/shigabutdinoff/gophermart/internal/repository/user"
 )
 
@@ -27,6 +30,7 @@ type Server struct {
 	srv             *http.Server
 	sqlDB           *sql.DB
 	authDeps        authentication.Deps
+	orderDeps       ordersroute.Deps
 	authorize       func(http.Handler) http.Handler
 	config.Config
 }
@@ -65,12 +69,15 @@ func newServer(
 	if err != nil {
 		return nil, err
 	}
+	storedOrders := orderrepository.New(gormDB)
+	upload := order.NewUploadService(storedOrders)
 
 	server := &Server{
 		logger:          logger,
 		shutdownTimeout: DefaultShutdownTimeout,
 		sqlDB:           sqlDB,
 		authDeps:        authentication.Deps{Register: registration.Register, Login: login.Login},
+		orderDeps:       ordersroute.Deps{Upload: upload.Upload},
 		authorize:       authorization.Middleware(logger, tokens.ParseRequest, users),
 		Config:          cfg,
 	}

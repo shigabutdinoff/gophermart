@@ -21,6 +21,24 @@ func TestFSContainsUsersMigration(t *testing.T) {
 	assert.Contains(t, sql, "DROP TABLE IF EXISTS users;")
 }
 
+func TestFSContainsOrdersMigration(t *testing.T) {
+	migration, err := FS.ReadFile("00002_create_orders.sql")
+	require.NoError(t, err)
+
+	sql := string(migration)
+	assert.Contains(t, sql, "-- +goose Up")
+	assert.Contains(t, sql, "-- +goose Down")
+	assert.Contains(t, sql, "CREATE TABLE orders")
+	assert.Contains(t, sql, "number TEXT NOT NULL")
+	assert.Contains(t, sql, "CONSTRAINT orders_number_key UNIQUE (number)")
+	assert.NotContains(t, sql, "number_hash")
+	assert.Contains(t, sql, "user_id BIGINT NOT NULL REFERENCES users (id)")
+	assert.Contains(t, sql, "CHECK (status IN ('NEW', 'PROCESSING', 'INVALID', 'PROCESSED'))")
+	assert.Contains(t, sql, "uploaded_at TIMESTAMPTZ NOT NULL")
+	assert.NotContains(t, sql, "orders_user_uploaded_idx")
+	assert.Contains(t, sql, "DROP TABLE IF EXISTS orders;")
+}
+
 func TestFSHasNoLegacyMigrationFiles(t *testing.T) {
 	entries, err := FS.ReadDir(".")
 	require.NoError(t, err)
@@ -29,5 +47,5 @@ func TestFSHasNoLegacyMigrationFiles(t *testing.T) {
 	for _, entry := range entries {
 		names = append(names, entry.Name())
 	}
-	assert.Equal(t, []string{"00001_create_users.sql"}, names)
+	assert.Equal(t, []string{"00001_create_users.sql", "00002_create_orders.sql"}, names)
 }

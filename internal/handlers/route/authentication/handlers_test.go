@@ -35,7 +35,7 @@ var handlerTestToken = auth.IssuedToken{
 func newRouter(logger *zap.Logger, deps Deps) http.Handler {
 	router := chi.NewRouter()
 	api := humachi.New(router, apiconfig.New())
-	RegisterRoutes(api, logger, deps)
+	RegisterRoutes(api, logger, deps, nil)
 
 	return router
 }
@@ -426,7 +426,7 @@ func TestRoutes_OtherOperationsKeepUnprocessableEntity(t *testing.T) {
 
 	router := chi.NewRouter()
 	api := humachi.New(router, apiconfig.New())
-	RegisterRoutes(api, zap.NewNop(), registerReturning(handlerTestToken, nil, nil))
+	RegisterRoutes(api, zap.NewNop(), registerReturning(handlerTestToken, nil, nil), nil)
 	huma.Register(api, huma.Operation{
 		OperationID: "upload-order",
 		Method:      http.MethodPost,
