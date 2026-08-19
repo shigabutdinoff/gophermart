@@ -100,3 +100,25 @@ func createOrFindOwner(tx *gorm.DB, number string, userID int64) (domain.CreateO
 
 	return domain.OwnedByAnother, nil
 }
+
+func (r *Repository) ListByUser(ctx context.Context, userID int64) ([]domain.Order, error) {
+	db, err := r.session.WithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []orderRow
+	if err := db.Table(ordersTable).
+		Where("user_id = ?", userID).
+		Order("uploaded_at DESC, id DESC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	orders := make([]domain.Order, len(rows))
+	for i, row := range rows {
+		orders[i] = row.order()
+	}
+
+	return orders, nil
+}

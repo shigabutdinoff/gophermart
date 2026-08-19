@@ -77,18 +77,3 @@ func (r *Repository) FindByLogin(ctx context.Context, login string) (auth.User, 
 		return auth.User{}, err
 	}
 }
-
-// Exists подтверждает наличие учётной записи, строку читать не нужно.
-func (r *Repository) Exists(ctx context.Context, userID int64) (bool, error) {
-	db, err := r.session.WithContext(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	var found int64
-	if err := db.Table(usersTable).Where("id = ?", userID).Count(&found).Error; err != nil {
-		return false, err
-	}
-
-	return found > 0, nil
-}

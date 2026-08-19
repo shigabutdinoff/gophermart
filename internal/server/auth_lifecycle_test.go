@@ -22,62 +22,62 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	"github.com/shigabutdinoff/gophermart/internal/auth"
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
-	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
+	ordersroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/orders"
+	"github.com/shigabutdinoff/gophermart/internal/order"
 )
 
-// Два сервера собраны без общего env-файла, поэтому получают разные секреты.
-func TestIndependentSecretsInvalidateTokenAcrossServers(t *testing.T) {
+func TestIndependentSecretsAreIsolatedOnProtectedOrderRoute(t *testing.T) {
+	const firstSecret = "0123456789abcdef0123456789abcdef"
 	now := func() time.Time {
 		return time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	}
-	gormDB, sqlDB, _ := newControllableDatabase(t, true, true)
-	require.NoError(t, gormDB.Callback().Create().Before("gorm:create").Register(
-		"test:set-ephemeral-user-id",
-		func(tx *gorm.DB) { tx.Statement.SetColumn("ID", int64(42)) },
-	))
-	registerMissingUserQuery(t, gormDB, nil)
-	first, err := newServer(
-		zap.NewNop(),
-		config.Default(),
+	firstTokens, err := auth.NewJWTManager([]byte(firstSecret), now)
+	require.NoError(t, err)
+	secondTokens, err := auth.NewJWTManager(
+		[]byte(strings.Repeat("a", len(firstSecret))),
 		now,
-		gormDB,
-		sqlDB,
 	)
 	require.NoError(t, err)
-	t.Cleanup(first.closeDatabase)
-	registration := serveLifecycleRequest(
-		first.router,
-		http.MethodPost,
-		"/api/user/register",
-		`{"login":"ephemeral-user","password":"password"}`,
-	)
-	require.Equal(t, http.StatusOK, registration.Code)
-	issued := registration.Header().Get("Authorization")
-	require.NotEmpty(t, issued)
+	issued, err := firstTokens.Issue(42)
+	require.NoError(t, err)
 
-	second, err := newServer(
-		zap.NewNop(),
-		config.Default(),
-		now,
-		nil,
-		nil,
-	)
-	require.NoError(t, err)
+	firstCalls := 0
+	first := &Server{
+		logger:      zap.NewNop(),
+		tokenParser: firstTokens.ParseRequest,
+		orderDeps: ordersroute.Deps{List: func(context.Context, int64) ([]order.Order, error) {
+			firstCalls++
+			return nil, nil
+		}},
+		Config: config.Default(),
+	}
+	first.setupRoutes()
+	secondCalls := 0
+	second := &Server{
+		logger:      zap.NewNop(),
+		tokenParser: secondTokens.ParseRequest,
+		orderDeps: ordersroute.Deps{List: func(context.Context, int64) ([]order.Order, error) {
+			secondCalls++
+			return nil, nil
+		}},
+		Config: config.Default(),
+	}
+	second.setupRoutes()
+
 	protected := func(server *Server) *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodGet, "/protected", http.NoBody)
-		request.Header.Set("Authorization", issued)
+		request := httptest.NewRequest(http.MethodGet, "/api/user/orders", http.NoBody)
+		request.Header.Set("Authorization", "Bearer "+issued.Value)
 		response := httptest.NewRecorder()
-		server.authorize(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
-		})).ServeHTTP(response, request)
+		server.router.ServeHTTP(response, request)
 		return response
 	}
 
 	assert.Equal(t, http.StatusNoContent, protected(first).Code)
-	afterRestart := protected(second)
-	assert.Equal(t, http.StatusUnauthorized, afterRestart.Code)
-	assert.Contains(t, afterRestart.Body.String(), message.Unauthorized)
+	assert.Equal(t, 1, firstCalls, "valid token reaches the business operation without a user lookup")
+	assert.Equal(t, http.StatusUnauthorized, protected(second).Code)
+	assert.Zero(t, secondCalls)
 }
 
 func TestRouterMissingAuthSchemaAfterMigrationFailureReturnsControlledError(t *testing.T) {
@@ -229,8 +229,6 @@ func newControllableDatabase(
 
 // registerMissingUserQuery заставляет поиск пользователя отвечать «не найден».
 // В DryRun запрос не выполняется, поэтому иначе поиск считался бы успешным.
-// Проверка существования учётной записи считает строки и отвечает утвердительно,
-// её отличает тип назначения, а Count поверх DryRun ещё смотрит на RowsAffected.
 func registerMissingUserQuery(t *testing.T, gormDB *gorm.DB, availability *atomic.Bool) {
 	t.Helper()
 
@@ -239,11 +237,6 @@ func registerMissingUserQuery(t *testing.T, gormDB *gorm.DB, availability *atomi
 		func(tx *gorm.DB) {
 			if availability != nil && !availability.Load() {
 				tx.AddError(errors.New("database is unavailable"))
-				return
-			}
-			if found, ok := tx.Statement.Dest.(*int64); ok {
-				*found = 1
-				tx.RowsAffected = 1
 				return
 			}
 			tx.AddError(gorm.ErrRecordNotFound)

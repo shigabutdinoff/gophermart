@@ -29,6 +29,7 @@ import (
 // registerHandler собирает маршрут регистрации так же, как это делает сервер.
 func registerHandler(register authentication.CredentialsFunc) http.Handler {
 	router := chi.NewRouter()
+	apiconfig.InstallErrorPolicy()
 	api := humachi.New(router, apiconfig.New())
 	authentication.RegisterRoutes(
 		api,

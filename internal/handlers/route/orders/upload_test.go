@@ -10,7 +10,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
-	"github.com/golang-jwt/jwt/v5/request"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -18,42 +17,9 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
-	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 	"github.com/shigabutdinoff/gophermart/internal/order"
 )
-
-const (
-	testUserID = 42
-	testNumber = "12345678903"
-)
-
-// stubUsers подтверждает существование пользователя из токена.
-type stubUsers struct{}
-
-func (stubUsers) Exists(context.Context, int64) (bool, error) { return true, nil }
-
-// newRouter собирает маршруты так же, как это делает сервер.
-func newRouter(logger *zap.Logger, deps Deps, userID int64) http.Handler {
-	router := chi.NewRouter()
-	authorize := authorization.Middleware(
-		logger,
-		func(*http.Request, request.Extractor) (int64, error) { return userID, nil },
-		stubUsers{},
-	)
-	api := humachi.New(router, apiconfig.New())
-	RegisterRoutes(api, logger, deps, apiconfig.FromHTTP(authorize))
-
-	return router
-}
-
-// newUnprotectedRouter публикует маршруты без посредника авторизации.
-func newUnprotectedRouter(deps Deps) http.Handler {
-	router := chi.NewRouter()
-	RegisterRoutes(humachi.New(router, apiconfig.New()), zap.NewNop(), deps, nil)
-
-	return router
-}
 
 func serveUpload(handler http.Handler, contentType, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/api/user/orders", strings.NewReader(body))
@@ -180,7 +146,7 @@ func TestUploadAcceptsBodyWithoutContentType(t *testing.T) {
 
 func TestUploadKeepsBodyReadDeadline(t *testing.T) {
 	api := humachi.New(chi.NewRouter(), apiconfig.New())
-	RegisterRoutes(api, zap.NewNop(), Deps{}, nil)
+	RegisterRoutes(api, zap.NewNop(), Deps{}, Options{})
 
 	operation := api.OpenAPI().Paths[ordersPath].Post
 
@@ -189,7 +155,7 @@ func TestUploadKeepsBodyReadDeadline(t *testing.T) {
 
 func TestUploadOperationDoesNotAdvertiseNotFound(t *testing.T) {
 	api := humachi.New(chi.NewRouter(), apiconfig.New())
-	RegisterRoutes(api, zap.NewNop(), Deps{}, nil)
+	RegisterRoutes(api, zap.NewNop(), Deps{}, Options{})
 
 	operation := api.OpenAPI().Paths[ordersPath].Post
 
@@ -198,9 +164,9 @@ func TestUploadOperationDoesNotAdvertiseNotFound(t *testing.T) {
 
 // Маршрут не полагается на посредника, пользователь берётся из контекста.
 func TestUploadRejectsRequestWithoutUser(t *testing.T) {
-	uploads := 0
+	calls := 0
 	deps := Deps{Upload: func(context.Context, string, int64) error {
-		uploads++
+		calls++
 		return nil
 	}}
 
@@ -209,7 +175,7 @@ func TestUploadRejectsRequestWithoutUser(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, response.Code)
 	assert.Equal(t, "application/problem+json", response.Header().Get("Content-Type"))
 	assert.Contains(t, response.Body.String(), message.Unauthorized)
-	assert.Zero(t, uploads)
+	assert.Zero(t, calls)
 }
 
 func TestUploadLogsInternalError(t *testing.T) {

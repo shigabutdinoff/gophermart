@@ -1,14 +1,12 @@
 package authorization
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/golang-jwt/jwt/v5/request"
-	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
@@ -16,75 +14,26 @@ import (
 // SessionCookieName называет cookie с тем же токеном, что и заголовок Bearer.
 const SessionCookieName = "gophermart_session"
 
-// Тела отказов в формате ошибок huma готовятся на старте
-var (
-	unauthorizedBody = mustMarshal(
-		huma.NewError(http.StatusUnauthorized, message.Unauthorized),
-	)
-	internalBody = mustMarshal(
-		huma.NewError(http.StatusInternalServerError, message.Internal),
-	)
-)
-
-// mustMarshal готовит тело на старте, пустой ответ отказа недопустим
-func mustMarshal(value any) []byte {
-	body, err := json.Marshal(value)
-	if err != nil {
-		panic(err)
-	}
-
-	return body
-}
-
 // TokenParser проверяет один токен из запроса.
 type TokenParser func(*http.Request, request.Extractor) (int64, error)
 
-// UserChecker подтверждает, что учётная запись из токена ещё существует.
-type UserChecker interface {
-	Exists(ctx context.Context, userID int64) (bool, error)
-}
-
 // Middleware пропускает запрос с токеном в заголовке Bearer или в cookie.
-// Токен переживает пересоздание базы, поэтому владелец ещё и проверяется.
-func Middleware(
-	logger *zap.Logger,
-	parse TokenParser,
-	users UserChecker,
-) func(http.Handler) http.Handler {
+func Middleware(api huma.API, parse TokenParser) func(huma.Context, func(huma.Context)) {
 	extractor := request.MultiExtractor{
 		nonemptyExtractor{Extractor: request.BearerExtractor{}},
 		sessionCookieExtractor{},
 	}
 
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			userID, err := parse(r, extractor)
-			if err != nil || userID <= 0 {
-				respond(w, http.StatusUnauthorized, unauthorizedBody)
-				return
-			}
+	return func(ctx huma.Context, next func(huma.Context)) {
+		r, _ := humachi.Unwrap(ctx)
+		userID, err := parse(r, extractor)
+		if err != nil || userID <= 0 {
+			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, message.Unauthorized)
+			return
+		}
 
-			exists, err := users.Exists(r.Context(), userID)
-			if err != nil {
-				logger.Error("Не удалось проверить пользователя", zap.Error(err))
-				respond(w, http.StatusInternalServerError, internalBody)
-				return
-			}
-			if !exists {
-				respond(w, http.StatusUnauthorized, unauthorizedBody)
-				return
-			}
-
-			next.ServeHTTP(w, r.WithContext(withUserID(r.Context(), userID)))
-		})
+		next(huma.WithContext(ctx, withUserID(ctx.Context(), userID)))
 	}
-}
-
-// respond отвечает так же, как отказали бы хендлеры за посредником.
-func respond(w http.ResponseWriter, status int, body []byte) {
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(status)
-	_, _ = w.Write(body)
 }
 
 type nonemptyExtractor struct {

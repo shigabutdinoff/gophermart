@@ -31,7 +31,7 @@ type Server struct {
 	sqlDB           *sql.DB
 	authDeps        authentication.Deps
 	orderDeps       ordersroute.Deps
-	authorize       func(http.Handler) http.Handler
+	tokenParser     authorization.TokenParser
 	config.Config
 }
 
@@ -70,15 +70,16 @@ func newServer(
 		return nil, err
 	}
 	storedOrders := orderrepository.New(gormDB)
-	upload := order.NewUploadService(storedOrders)
+	orderUpload := order.NewUploadService(storedOrders)
+	orderList := order.NewListService(storedOrders)
 
 	server := &Server{
 		logger:          logger,
 		shutdownTimeout: DefaultShutdownTimeout,
 		sqlDB:           sqlDB,
 		authDeps:        authentication.Deps{Register: registration.Register, Login: login.Login},
-		orderDeps:       ordersroute.Deps{Upload: upload.Upload},
-		authorize:       authorization.Middleware(logger, tokens.ParseRequest, users),
+		orderDeps:       ordersroute.Deps{Upload: orderUpload.Upload, List: orderList.List},
+		tokenParser:     tokens.ParseRequest,
 		Config:          cfg,
 	}
 	server.setupRoutes()

@@ -2,22 +2,22 @@ package authorization
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/golang-jwt/jwt/v5/request"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
 
@@ -27,53 +27,57 @@ type middlewareResult struct {
 	response      *httptest.ResponseRecorder
 	request       *http.Request
 	nextCalls     int
+	handlerCalls  int
 	contextUserID int64
 	contextHasID  bool
 }
 
-// stubUsers отвечает за хранилище учётных записей заданным исходом.
-type stubUsers struct {
-	exists bool
-	err    error
-	calls  int
-	userID int64
-}
-
-func (s *stubUsers) Exists(_ context.Context, userID int64) (bool, error) {
-	s.calls++
-	s.userID = userID
-
-	return s.exists, s.err
+type middlewareOutput struct {
+	Status int
 }
 
 func serveAuthorized(t *testing.T, configure func(*http.Request)) middlewareResult {
 	t.Helper()
 
-	return serveAuthorizedWith(t, zap.NewNop(), &stubUsers{exists: true}, configure)
+	return serveAuthorizedWith(t, testManager(t).ParseRequest, configure)
 }
 
 func serveAuthorizedWith(
 	t *testing.T,
-	logger *zap.Logger,
-	users UserChecker,
+	parse TokenParser,
 	configure func(*http.Request),
 ) middlewareResult {
 	t.Helper()
+
+	result := middlewareResult{}
+	router := chi.NewRouter()
+	apiconfig.InstallErrorPolicy()
+	api := humachi.New(router, apiconfig.New())
+	huma.Register(api, huma.Operation{
+		OperationID: "authorization-test",
+		Method:      http.MethodGet,
+		Path:        "/protected",
+		Middlewares: huma.Middlewares{
+			Middleware(api, parse),
+			func(ctx huma.Context, next func(huma.Context)) {
+				result.nextCalls++
+				next(ctx)
+			},
+		},
+	}, func(ctx context.Context, _ *struct{}) (*middlewareOutput, error) {
+		result.handlerCalls++
+		result.contextUserID, result.contextHasID = UserID(ctx)
+		return &middlewareOutput{Status: http.StatusNoContent}, nil
+	})
 
 	r := httptest.NewRequest(http.MethodGet, "/protected", http.NoBody)
 	if configure != nil {
 		configure(r)
 	}
 	response := httptest.NewRecorder()
-
-	result := middlewareResult{response: response, request: r}
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		result.nextCalls++
-		result.contextUserID, result.contextHasID = UserID(r.Context())
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	Middleware(logger, testManager(t).ParseRequest, users)(next).ServeHTTP(response, r)
+	result.response = response
+	result.request = r
+	router.ServeHTTP(response, r)
 
 	return result
 }
@@ -330,46 +334,23 @@ func TestMiddleware_RejectsMissingInvalidOrNonpositiveCredentials(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			users := &stubUsers{exists: true}
-
-			result := serveAuthorizedWith(t, zap.NewNop(), users, tt.configure)
+			result := serveAuthorized(t, tt.configure)
 
 			assertUnauthorized(t, result)
-			assert.Zero(t, users.calls)
 		})
 	}
 }
 
-func TestMiddleware_RejectsTokenOfMissingUser(t *testing.T) {
-	users := &stubUsers{}
-
-	result := serveAuthorizedWith(t, zap.NewNop(), users, func(r *http.Request) {
+func TestMiddleware_ValidTokenReachesHandlerWithoutUserRepository(t *testing.T) {
+	result := serveAuthorized(t, func(r *http.Request) {
 		r.Header.Set("Authorization", "Bearer "+issuedToken(t, 7))
 	})
 
-	assertUnauthorized(t, result)
-	assert.Equal(t, 1, users.calls)
-	assert.Equal(t, int64(7), users.userID)
-}
-
-func TestMiddleware_AnswersInternalErrorWhenCheckFails(t *testing.T) {
-	core, logs := observer.New(zapcore.ErrorLevel)
-	users := &stubUsers{err: errors.New("database is unavailable")}
-
-	result := serveAuthorizedWith(t, zap.New(core), users, func(r *http.Request) {
-		r.Header.Set("Authorization", "Bearer "+issuedToken(t, 7))
-	})
-
-	assert.Equal(t, http.StatusInternalServerError, result.response.Code)
-	assert.Equal(
-		t,
-		"application/problem+json",
-		result.response.Header().Get("Content-Type"),
-	)
-	assert.Contains(t, result.response.Body.String(), message.Internal)
-	assert.Zero(t, result.nextCalls)
-	require.Equal(t, 1, logs.Len())
-	assert.Contains(t, logs.All()[0].ContextMap()["error"], "database is unavailable")
+	assert.Equal(t, http.StatusNoContent, result.response.Code)
+	assert.Equal(t, 1, result.nextCalls)
+	assert.Equal(t, 1, result.handlerCalls)
+	assert.Equal(t, int64(7), result.contextUserID)
+	assert.True(t, result.contextHasID)
 }
 
 func TestMiddleware_StoresUserIDWithoutTouchingOriginalRequest(t *testing.T) {
@@ -385,10 +366,6 @@ func TestMiddleware_StoresUserIDWithoutTouchingOriginalRequest(t *testing.T) {
 }
 
 func TestMiddleware_CallsParserOnceWithOrderedExtractor(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/protected", http.NoBody)
-	r.Header.Set("Authorization", "Bearer selected")
-	r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "fallback"})
-	w := httptest.NewRecorder()
 	parserCalls := 0
 	selected := ""
 	parser := func(r *http.Request, extractor request.Extractor) (int64, error) {
@@ -397,14 +374,15 @@ func TestMiddleware_CallsParserOnceWithOrderedExtractor(t *testing.T) {
 		selected, err = extractor.ExtractToken(r)
 		return 7, err
 	}
-	nextCalls := 0
-	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { nextCalls++ })
-
-	Middleware(zap.NewNop(), parser, &stubUsers{exists: true})(next).ServeHTTP(w, r)
+	result := serveAuthorizedWith(t, parser, func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer selected")
+		r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "fallback"})
+	})
 
 	assert.Equal(t, 1, parserCalls)
 	assert.Equal(t, "selected", selected)
-	assert.Equal(t, 1, nextCalls)
+	assert.Equal(t, 1, result.nextCalls)
+	assert.Equal(t, 1, result.handlerCalls)
 }
 
 func TestMiddleware_MalformedOrUnrelatedCookiesDoNotDisturbSelectedBearer(t *testing.T) {
@@ -476,6 +454,7 @@ func assertUnauthorized(t *testing.T, result middlewareResult) {
 		result.response.Body.String(),
 	)
 	assert.Zero(t, result.nextCalls)
+	assert.Zero(t, result.handlerCalls)
 }
 
 func testSecret() []byte {

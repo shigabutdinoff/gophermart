@@ -1,0 +1,55 @@
+package apiconfig
+
+import (
+	"net/http"
+	"sync"
+
+	"github.com/danielgtaylor/huma/v2"
+)
+
+const (
+	validationErrorsAsBadRequestKey = "gophermart.validation-errors-as-bad-request"
+	humaValidationErrorMessage      = "validation failed"
+)
+
+type errorFactory = func(huma.Context, int, string, ...error) huma.StatusError
+
+func newErrorPolicyInstaller(target *errorFactory) func() {
+	return sync.OnceFunc(func() {
+		next := *target
+		*target = func(
+			ctx huma.Context,
+			status int,
+			msg string,
+			errs ...error,
+		) huma.StatusError {
+			if status == http.StatusUnprocessableEntity && msg == humaValidationErrorMessage && len(errs) > 0 && ctx != nil {
+				if operation := ctx.Operation(); operation != nil {
+					marked, _ := operation.Metadata[validationErrorsAsBadRequestKey].(bool)
+					if marked {
+						status = http.StatusBadRequest
+					}
+				}
+			}
+
+			return next(ctx, status, msg, errs...)
+		}
+	})
+}
+
+var installErrorPolicyOnce = newErrorPolicyInstaller(&huma.NewErrorWithContext)
+
+// InstallErrorPolicy устанавливает глобальную политику Huma: ошибки валидации
+// со статусом 422 получают статус 400 только у операций, помеченных
+// ValidationErrorsAsBadRequest. Её нужно вызвать при запуске до начала обработки
+// запросов. Параллельные вызовы самой функции безопасны, но безопасное изменение
+// глобальной настройки Huma одновременно с обработкой запросов не гарантируется.
+func InstallErrorPolicy() {
+	installErrorPolicyOnce()
+}
+
+// ValidationErrorsAsBadRequest помечает операции, для которых ошибки схемы
+// входят в предусмотренный ТЗ ответ 400 вместо стандартного ответа huma 422.
+func ValidationErrorsAsBadRequest() map[string]any {
+	return map[string]any{validationErrorsAsBadRequestKey: true}
+}

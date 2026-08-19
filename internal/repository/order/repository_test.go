@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,8 +19,10 @@ func TestRepository_MissingCurrentDatabaseIsControlled(t *testing.T) {
 	repository := New(nil)
 
 	_, createErr := repository.CreateOrFindOwner(context.Background(), "12345678903", 1)
+	_, listErr := repository.ListByUser(context.Background(), 1)
 
 	require.ErrorIs(t, createErr, database.ErrUnavailable)
+	require.ErrorIs(t, listErr, database.ErrUnavailable)
 }
 
 func TestRepository_CreateOrFindOwnerStoresNewOrderWithContext(t *testing.T) {
@@ -139,6 +142,41 @@ func TestRepository_CreateOrFindOwnerKeepsMissingRowAsStorageError(t *testing.T)
 	_, err := createOrFindOwner(gormDB, "12345678903", 1)
 
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestRepository_ListByUserReturnsStoredOrders(t *testing.T) {
+	gormDB := newDryRunDB(t)
+	uploadedAt := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC)
+	var query string
+	var variables []any
+	require.NoError(t, gormDB.Callback().Query().After("gorm:query").Register(
+		"test:observe-list-by-user",
+		func(tx *gorm.DB) {
+			query = tx.Statement.SQL.String()
+			variables = slices.Clone(tx.Statement.Vars)
+			if rows, ok := tx.Statement.Dest.(*[]orderRow); ok {
+				*rows = []orderRow{{
+					Number:     "12345678903",
+					UserID:     42,
+					Status:     domain.StatusProcessed,
+					UploadedAt: uploadedAt,
+				}}
+			}
+		},
+	))
+
+	list, err := New(gormDB).ListByUser(context.Background(), 42)
+
+	require.NoError(t, err)
+	assert.Equal(t, []domain.Order{{
+		Number:     "12345678903",
+		UserID:     42,
+		Status:     domain.StatusProcessed,
+		UploadedAt: uploadedAt,
+	}}, list)
+	assert.Contains(t, query, `WHERE user_id = $1`)
+	assert.Contains(t, query, `ORDER BY uploaded_at DESC, id DESC`)
+	assert.Equal(t, []any{int64(42)}, variables)
 }
 
 func TestOrderRowDeclaresColumnsOfOrdersTable(t *testing.T) {
