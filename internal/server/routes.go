@@ -4,6 +4,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/logging"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
 )
@@ -12,7 +13,7 @@ func (s *Server) setupRoutes() {
 	router := chi.NewRouter()
 
 	router.Use(logging.WithLogging(s.logger))
-	api := humachi.New(router, authentication.APIConfig())
+	api := humachi.New(router, apiconfig.New())
 	authentication.RegisterRoutes(api, s.logger, s.authDeps)
 
 	s.router = router

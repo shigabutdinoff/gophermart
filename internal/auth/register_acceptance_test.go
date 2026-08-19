@@ -21,13 +21,14 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
 )
 
 // registerHandler собирает маршрут регистрации так же, как это делает сервер.
 func registerHandler(register authentication.CredentialsFunc) http.Handler {
 	router := chi.NewRouter()
-	api := humachi.New(router, authentication.APIConfig())
+	api := humachi.New(router, apiconfig.New())
 	authentication.RegisterRoutes(
 		api,
 		zap.NewNop(),

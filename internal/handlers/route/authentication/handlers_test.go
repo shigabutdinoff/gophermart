@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 )
 
@@ -32,7 +33,7 @@ var handlerTestToken = auth.IssuedToken{
 // newRouter собирает маршруты так же, как это делает сервер.
 func newRouter(logger *zap.Logger, deps Deps) http.Handler {
 	router := chi.NewRouter()
-	api := humachi.New(router, APIConfig())
+	api := humachi.New(router, apiconfig.New())
 	RegisterRoutes(api, logger, deps)
 
 	return router
@@ -423,7 +424,7 @@ func TestRoutes_OtherOperationsKeepUnprocessableEntity(t *testing.T) {
 	}
 
 	router := chi.NewRouter()
-	api := humachi.New(router, APIConfig())
+	api := humachi.New(router, apiconfig.New())
 	RegisterRoutes(api, zap.NewNop(), registerReturning(handlerTestToken, nil, nil))
 	huma.Register(api, huma.Operation{
 		OperationID: "upload-order",
