@@ -31,7 +31,7 @@ func TestFSContainsOrdersMigration(t *testing.T) {
 	assert.Contains(t, sql, "user_id BIGINT NOT NULL REFERENCES users (id)")
 	assert.Contains(t, sql, "CHECK (status IN ('NEW', 'PROCESSING', 'INVALID', 'PROCESSED'))")
 	assert.Contains(t, sql, "uploaded_at TIMESTAMPTZ NOT NULL")
-	assert.NotContains(t, sql, "orders_user_uploaded_idx")
+	assert.Contains(t, sql, "CREATE INDEX orders_user_uploaded_idx ON orders (user_id, uploaded_at DESC, id DESC);")
 	assert.Contains(t, sql, "DROP TABLE IF EXISTS orders;")
 }
 

@@ -10,5 +10,7 @@ CREATE TABLE orders (
     CONSTRAINT orders_number_hash_key UNIQUE (number_hash)
 );
 
+CREATE INDEX orders_user_uploaded_idx ON orders (user_id, uploaded_at DESC, id DESC);
+
 -- +goose Down
 DROP TABLE IF EXISTS orders;
