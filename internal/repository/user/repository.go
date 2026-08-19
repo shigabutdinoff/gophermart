@@ -32,20 +32,12 @@ func (r userRow) user() auth.User {
 
 // Repository хранит учётные записи, логин ожидается уже нормализованным.
 type Repository struct {
-	db *gorm.DB
+	session database.Session
 }
 
 // New принимает nil вместо БД, тогда репозиторий отвечает отказом.
 func New(db *gorm.DB) *Repository {
-	return &Repository{db: db}
-}
-
-// session привязывает подключение к запросу, отсутствие БД означает отказ.
-func (r *Repository) session(ctx context.Context) (*gorm.DB, error) {
-	if r.db == nil {
-		return nil, database.ErrUnavailable
-	}
-	return r.db.WithContext(ctx), nil
+	return &Repository{session: database.NewSession(db)}
 }
 
 func (r *Repository) Create(
@@ -53,7 +45,7 @@ func (r *Repository) Create(
 	login string,
 	passwordHash string,
 ) (auth.User, error) {
-	db, err := r.session(ctx)
+	db, err := r.session.WithContext(ctx)
 	if err != nil {
 		return auth.User{}, err
 	}
@@ -70,7 +62,7 @@ func (r *Repository) Create(
 }
 
 func (r *Repository) FindByLogin(ctx context.Context, login string) (auth.User, error) {
-	db, err := r.session(ctx)
+	db, err := r.session.WithContext(ctx)
 	if err != nil {
 		return auth.User{}, err
 	}
@@ -88,7 +80,7 @@ func (r *Repository) FindByLogin(ctx context.Context, login string) (auth.User, 
 
 // Exists подтверждает наличие учётной записи, строку читать не нужно.
 func (r *Repository) Exists(ctx context.Context, userID int64) (bool, error) {
-	db, err := r.session(ctx)
+	db, err := r.session.WithContext(ctx)
 	if err != nil {
 		return false, err
 	}
