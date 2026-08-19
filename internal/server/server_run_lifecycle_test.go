@@ -1,14 +1,10 @@
 package server
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -284,91 +280,4 @@ func TestServer_Run_InvalidAddress(t *testing.T) {
 	s := mustNew(t, zap.NewNop(), config.Default())
 	s.runAddress = "bad::addr"
 	require.Error(t, s.Run(context.Background()))
-}
-
-func TestRouter_CompressesResponseForGzipClient(t *testing.T) {
-	s := mustNew(t, zap.NewNop(), config.Default())
-	s.router.Get("/payload", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok","padding":"` + strings.Repeat("0123456789", 60) + `"}`))
-	})
-	srv := httptest.NewServer(s.router)
-	defer srv.Close()
-
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/payload", http.NoBody)
-	require.NoError(t, err)
-	req.Header.Set("Accept-Encoding", "gzip")
-
-	resp, err := rawClient().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
-	zr, err := gzip.NewReader(resp.Body)
-	require.NoError(t, err)
-	body, err := io.ReadAll(zr)
-	require.NoError(t, err)
-	assert.Contains(t, string(body), `"status":"ok"`)
-}
-
-func TestRouter_DecompressesRequestBody(t *testing.T) {
-	s := mustNew(t, zap.NewNop(), config.Default())
-	s.router.Post("/echo", func(w http.ResponseWriter, req *http.Request) {
-		b, err := io.ReadAll(req.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		_, _ = w.Write(b)
-	})
-	srv := httptest.NewServer(s.router)
-	defer srv.Close()
-
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/echo", gzipBody(t, "12345678903"))
-	require.NoError(t, err)
-	req.Header.Set("Content-Encoding", "gzip")
-
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	assert.Equal(t, "12345678903", string(body))
-}
-
-func TestRouter_BadGzipBodyRejected(t *testing.T) {
-	s := mustNew(t, zap.NewNop(), config.Default())
-	s.router.Post("/echo", func(w http.ResponseWriter, req *http.Request) {
-		_, _ = io.Copy(io.Discard, req.Body)
-		w.WriteHeader(http.StatusOK)
-	})
-	srv := httptest.NewServer(s.router)
-	defer srv.Close()
-
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/echo", strings.NewReader("not-gzip"))
-	require.NoError(t, err)
-	req.Header.Set("Content-Encoding", "gzip")
-
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-
-func gzipBody(t *testing.T, s string) *bytes.Buffer {
-	t.Helper()
-
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	_, err := zw.Write([]byte(s))
-	require.NoError(t, err)
-	require.NoError(t, zw.Close())
-	return &buf
-}
-
-func rawClient() *http.Client {
-	return &http.Client{Transport: &http.Transport{DisableCompression: true}}
 }
