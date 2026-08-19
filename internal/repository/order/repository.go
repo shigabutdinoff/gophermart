@@ -2,6 +2,7 @@ package order
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 
 const ordersTable = "orders"
 
+var errNumberHashCollision = errors.New("order number hash collision")
+
 // errPusherMissing отвечает за репозиторий, собранный без очереди заданий.
 var errPusherMissing = errors.New("order job pusher is not configured")
 
@@ -24,6 +27,7 @@ var errPusherMissing = errors.New("order job pusher is not configured")
 type orderRow struct {
 	ID         int64         `gorm:"column:id;primaryKey"`
 	Number     string        `gorm:"column:number"`
+	NumberHash []byte        `gorm:"column:number_hash"`
 	UserID     int64         `gorm:"column:user_id"`
 	Status     domain.Status `gorm:"column:status"`
 	UploadedAt time.Time     `gorm:"column:uploaded_at;autoCreateTime"`
@@ -87,19 +91,9 @@ func (r *Repository) CreateOrFindOwner(
 	var outcome domain.CreateOutcome
 	err = database.Transact(db, func(tx database.Tx) error {
 		var err error
-		outcome, err = createOrFindOwner(tx.DB(), number, userID)
-		if err != nil || outcome != domain.Created {
-			return err
-		}
-		sqlTx, err := tx.SQL()
-		if err != nil {
-			return err
-		}
-		if err := r.jobs.Push(ctx, sqlTx, number); err != nil {
-			return fmt.Errorf("dispatch accrual check: %w", err)
-		}
+		outcome, err = r.createOrFindOwner(ctx, tx, number, userID)
 
-		return nil
+		return err
 	})
 	if err != nil {
 		return 0, err
@@ -109,15 +103,19 @@ func (r *Repository) CreateOrFindOwner(
 }
 
 // createOrFindOwner молчит о конфликте номера, прочие остаются ошибкой.
-func createOrFindOwner(tx *gorm.DB, number string, userID int64) (domain.CreateOutcome, error) {
+func (r *Repository) createOrFindOwner(
+	ctx context.Context,
+	tx database.Tx,
+	number string,
+	userID int64,
+) (domain.CreateOutcome, error) {
+	digest := sha256.Sum256([]byte(number))
 	row := orderRow{
-		Number: number,
-		UserID: userID,
-		Status: domain.StatusNew,
+		Number: number, NumberHash: digest[:], UserID: userID, Status: domain.StatusNew,
 	}
-	insert := tx.Table(ordersTable).
+	insert := tx.DB().Table(ordersTable).
 		Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "number"}},
+			Columns:   []clause.Column{{Name: "number_hash"}},
 			DoNothing: true,
 		}).
 		Create(&row)
@@ -125,13 +123,21 @@ func createOrFindOwner(tx *gorm.DB, number string, userID int64) (domain.CreateO
 		return 0, insert.Error
 	}
 	if insert.RowsAffected == 1 {
+		sqlTx, err := tx.SQL()
+		if err != nil {
+			return 0, err
+		}
+		if err := r.jobs.Push(ctx, sqlTx, number); err != nil {
+			return 0, fmt.Errorf("dispatch accrual check: %w", err)
+		}
+
 		return domain.Created, nil
 	}
 
 	var stored orderRow
-	if err := tx.Table(ordersTable).
-		Select("user_id").
-		Where("number = ?", number).
+	if err := tx.DB().Table(ordersTable).
+		Select("number", "user_id").
+		Where("number_hash = ?", digest[:]).
 		Take(&stored).Error; err != nil {
 		// строку только что перехватил конкурент и она уже удалена
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -139,6 +145,9 @@ func createOrFindOwner(tx *gorm.DB, number string, userID int64) (domain.CreateO
 		}
 
 		return 0, fmt.Errorf("find order owner: %w", err)
+	}
+	if stored.Number != number {
+		return 0, errNumberHashCollision
 	}
 	if stored.UserID == userID {
 		return domain.AlreadyOwned, nil

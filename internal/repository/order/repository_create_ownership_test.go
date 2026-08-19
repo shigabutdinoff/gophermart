@@ -2,6 +2,7 @@ package order
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"testing"
 
@@ -28,6 +29,7 @@ func TestRepository_CreateOrFindOwnerCreatesNewOrder(t *testing.T) {
 	session, gormDB := testkit.NewDryRunSession(t)
 	jobs := &testkit.RecordingPusher{}
 	number := "12345678903"
+	digest := sha256.Sum256([]byte(number))
 	observed := testkit.ObserveStatements(t, gormDB)
 
 	outcome, err := newRepositoryWithPusher(t, session, jobs.ExpectPushes(t, 1)).
@@ -39,16 +41,22 @@ func TestRepository_CreateOrFindOwnerCreatesNewOrder(t *testing.T) {
 	destination, ok := statement.Dest.(*orderRow)
 	require.True(t, ok)
 	assert.Equal(t, number, destination.Number)
+	assert.Equal(t, digest[:], destination.NumberHash)
 	assert.Equal(t, int64(42), destination.UserID)
 	assert.Equal(t, domain.StatusNew, destination.Status)
 	assert.Nil(t, destination.Accrual)
-	assert.Contains(t, statement.SQL, `INSERT INTO "orders" ("number","user_id","status","uploaded_at","accrual")`)
-	assert.Contains(t, statement.SQL, `ON CONFLICT ("number") DO NOTHING`)
-	require.Len(t, statement.Variables, 5)
+	assert.Contains(
+		t,
+		statement.SQL,
+		`INSERT INTO "orders" ("number","number_hash","user_id","status","uploaded_at","accrual")`,
+	)
+	assert.Contains(t, statement.SQL, `ON CONFLICT ("number_hash") DO NOTHING`)
+	require.Len(t, statement.Variables, 6)
 	assert.Equal(t, number, statement.Variables[0])
-	assert.Equal(t, int64(42), statement.Variables[1])
-	assert.Equal(t, domain.StatusNew, statement.Variables[2])
-	assert.Nil(t, statement.Variables[4])
+	assert.Equal(t, digest[:], statement.Variables[1])
+	assert.Equal(t, int64(42), statement.Variables[2])
+	assert.Equal(t, domain.StatusNew, statement.Variables[3])
+	assert.Nil(t, statement.Variables[5])
 	assert.Equal(t, testkit.TransactionState{Begun: 1, Committed: 1}, testkit.TransactionStateOf(t, gormDB))
 	assert.Equal(t, []string{number}, jobs.Numbers)
 	require.Len(t, jobs.Transactions, 1)
@@ -83,6 +91,20 @@ func TestRepository_CreateOrFindOwnerRecognizesAnotherOwner(t *testing.T) {
 	assert.Equal(t, domain.OwnedByAnother, outcome)
 	assert.Equal(t, testkit.TransactionState{Begun: 1, Committed: 1}, testkit.TransactionStateOf(t, gormDB))
 	assert.Empty(t, jobs.Numbers, "чужой заказ задания не заводит")
+}
+
+func TestRepository_CreateOrFindOwnerRejectsDigestCollision(t *testing.T) {
+	session, gormDB := testkit.NewDryRunSession(t)
+	jobs := &testkit.RecordingPusher{}
+	testkit.SetCreateResult(gormDB, 0, nil)
+	testkit.SetQueryResult(gormDB, []orderRow{{Number: "9278923470", UserID: 7}}, nil)
+
+	_, err := newRepositoryWithPusher(t, session, jobs.ExpectPushes(t, 0)).
+		CreateOrFindOwner(context.Background(), "12345678903", 42)
+
+	require.ErrorIs(t, err, errNumberHashCollision)
+	assert.NotErrorIs(t, err, domain.ErrOwnedByAnother)
+	assert.Equal(t, testkit.TransactionState{Begun: 1, RolledBack: 1}, testkit.TransactionStateOf(t, gormDB))
 }
 
 func TestRepository_CreateOrFindOwnerKeepsWriteError(t *testing.T) {
