@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	testUserID = 42
-	testNumber = "12345678903"
+	testBodyLimit = 1 << 20
+	testUserID    = 42
+	testNumber    = "12345678903"
 )
 
 // newRouter собирает маршруты так же, как это делает сервер.

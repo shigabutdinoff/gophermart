@@ -91,6 +91,7 @@ func registerUploadRoute(
 			http.StatusBadRequest,
 			http.StatusUnauthorized,
 			http.StatusConflict,
+			http.StatusRequestEntityTooLarge,
 			http.StatusUnprocessableEntity,
 			http.StatusInternalServerError,
 		},
