@@ -31,8 +31,8 @@ func (s *Server) setupRoutes() {
 func (s *Server) registerHealthcheck(router *chi.Mux) {
 	router.Get(healthcheck.LivePath, func(http.ResponseWriter, *http.Request) {})
 	ready := healthcheck.Ping(s.pinger)
-	router.Get("/ready", ready)
-	router.Get("/ping", ready)
+	router.Get(healthcheck.ReadyPath, ready)
+	router.Get(healthcheck.PingPath, ready)
 }
 
 func (s *Server) installMiddleware(router *chi.Mux) {

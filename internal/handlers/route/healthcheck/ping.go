@@ -11,6 +11,12 @@ import (
 // LivePath отвечает, что процесс жив, не трогая хранилище.
 const LivePath = "/live"
 
+// ReadyPath и PingPath отвечают готовностью, проверяя хранилище.
+const (
+	ReadyPath = "/ready"
+	PingPath  = "/ping"
+)
+
 // PingTimeout ограничивает время проверки соединения с БД.
 const PingTimeout = time.Second
 

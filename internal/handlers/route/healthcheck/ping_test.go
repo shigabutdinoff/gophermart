@@ -33,7 +33,7 @@ func (f *fakePinger) PingContext(ctx context.Context) error {
 
 func servePing(pinger Pinger) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	req := httptest.NewRequest(http.MethodGet, PingPath, nil)
 	Ping(func() Pinger { return pinger })(rec, req)
 	return rec
 }
@@ -89,12 +89,12 @@ func TestPing_UsesCurrentDatabaseOnEveryRequest(t *testing.T) {
 	})
 
 	first := httptest.NewRecorder()
-	handler(first, httptest.NewRequest(http.MethodGet, "/ping", nil))
+	handler(first, httptest.NewRequest(http.MethodGet, PingPath, nil))
 	assert.Equal(t, http.StatusServiceUnavailable, first.Code)
 
 	current = &fakePinger{}
 	second := httptest.NewRecorder()
-	handler(second, httptest.NewRequest(http.MethodGet, "/ping", nil))
+	handler(second, httptest.NewRequest(http.MethodGet, PingPath, nil))
 	assert.Equal(t, http.StatusOK, second.Code)
 	assert.Equal(t, 2, getterCalls)
 }
@@ -111,7 +111,7 @@ func TestPing_AppliesDeadline(t *testing.T) {
 // На отменённый контекст запроса приходит отказ, а не успешный отчёт.
 func TestPing_FailsOnCanceledRequestContext(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	req := httptest.NewRequest(http.MethodGet, PingPath, nil)
 	ctx, cancel := context.WithCancel(req.Context())
 	cancel()
 
@@ -127,9 +127,9 @@ func TestPing_SameHandlerAnswersBothRoutes(t *testing.T) {
 	handler := Ping(func() Pinger { return &fakePinger{} })
 
 	ready := httptest.NewRecorder()
-	handler(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	handler(ready, httptest.NewRequest(http.MethodGet, ReadyPath, nil))
 	ping := httptest.NewRecorder()
-	handler(ping, httptest.NewRequest(http.MethodGet, "/ping", nil))
+	handler(ping, httptest.NewRequest(http.MethodGet, PingPath, nil))
 
 	require.Equal(t, ready.Code, ping.Code)
 	assert.Equal(t, ready.Header().Get("Content-Type"), ping.Header().Get("Content-Type"))
