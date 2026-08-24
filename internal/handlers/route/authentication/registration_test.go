@@ -175,6 +175,7 @@ func TestRegister_InvalidRequestsStopBeforeAction(t *testing.T) {
 		{"malformed json", "application/json", `{"login":`, http.StatusBadRequest},
 		{"wrong field type", "application/json", `{"login":1,"password":"password"}`, http.StatusBadRequest},
 		{"missing field", "application/json", `{"login":"user"}`, http.StatusBadRequest},
+		{"invalid credentials", "application/json", `{"login":"user","password":"short"}`, http.StatusBadRequest},
 		{"escaped NUL in login", "application/json", `{"login":"user\u0000suffix","password":"password"}`, http.StatusBadRequest},
 		{"login of spaces", "application/json", `{"login":"   ","password":"password"}`, http.StatusBadRequest},
 	}
@@ -257,7 +258,7 @@ func TestRegister_ProblemBodyHasNoSchemaLink(t *testing.T) {
 	response := serveRegister(
 		registerReturning(handlerTestToken, nil, nil),
 		"application/json",
-		`{"login":"   ","password":"password"}`,
+		`{"login":"user","password":"short"}`,
 	)
 
 	require.Equal(t, http.StatusBadRequest, response.Code)

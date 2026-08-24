@@ -80,13 +80,16 @@ func TestRoutes_StatusesStayWithinSpecification(t *testing.T) {
 		http.StatusOK:                    true,
 		http.StatusBadRequest:            true,
 		http.StatusUnauthorized:          true,
-		http.StatusRequestEntityTooLarge: true,
 		http.StatusConflict:              true,
+		http.StatusTooManyRequests:       true,
+		http.StatusRequestEntityTooLarge: true,
+		http.StatusUnsupportedMediaType:  true,
 		http.StatusInternalServerError:   true,
 	}
 	bodies := []string{
 		`{"login":"user","password":"password"}`,
 		`{"login":"   ","password":"password"}`,
+		`{"login":"user","password":"short"}`,
 		`{"login":1,"password":"password"}`,
 		`{"login":"user"}`,
 		`{`,
