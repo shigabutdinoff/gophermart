@@ -14,6 +14,8 @@ var (
 	ErrUnknownStatus = errors.New("unknown status")
 	// ErrMalformedResponse помечает ответ, который не разберётся и позже.
 	ErrMalformedResponse = errors.New("malformed response")
+	// ErrResponseTooLarge закрывает предел тела от типа HTTP-клиента.
+	ErrResponseTooLarge = errors.New("response body is too large")
 )
 
 // TooManyRequestsError несёт задержку из заголовка Retry-After.

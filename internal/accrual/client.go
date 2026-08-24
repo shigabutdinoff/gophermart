@@ -3,6 +3,7 @@ package accrual
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -18,6 +19,9 @@ const orderPath = "/api/orders/{number}"
 
 // requestTimeout ограничивает один запрос к системе расчёта.
 const requestTimeout = 5 * time.Second
+
+// maxResponseBytes держит тело чужого ответа в разумных пределах.
+const maxResponseBytes = 64 << 10
 
 // OrderInfo несёт результат расчёта в терминах домена заказов.
 type OrderInfo struct {
@@ -48,6 +52,7 @@ func New(address string) (*Client, error) {
 	client := resty.New().
 		SetBaseURL(baseURL).
 		SetTimeout(requestTimeout).
+		SetResponseBodyLimit(maxResponseBytes).
 		SetCookieJar(nil).
 		SetRedirectPolicy(resty.NoRedirectPolicy())
 
@@ -71,7 +76,7 @@ func (c *Client) orderInfo(ctx context.Context, number string) (OrderInfo, error
 		SetPathParam("number", number).
 		Get(orderPath)
 	if err != nil {
-		return OrderInfo{}, err
+		return OrderInfo{}, requestError(err)
 	}
 
 	switch response.StatusCode() {
@@ -84,6 +89,15 @@ func (c *Client) orderInfo(ctx context.Context, number string) (OrderInfo, error
 	default:
 		return OrderInfo{}, &UnexpectedStatusError{StatusCode: response.StatusCode()}
 	}
+}
+
+// requestError прячет сентинелы HTTP-библиотеки за ошибками пакета.
+func requestError(err error) error {
+	if errors.Is(err, resty.ErrResponseBodyTooLarge) {
+		return ErrResponseTooLarge
+	}
+
+	return err
 }
 
 func parseOrderInfo(number string, body []byte) (OrderInfo, error) {

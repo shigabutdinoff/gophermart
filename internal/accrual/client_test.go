@@ -1,6 +1,7 @@
 package accrual
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -426,4 +427,15 @@ func TestNewDropsQueryAndFragmentFromAddress(t *testing.T) {
 			assert.Equal(t, "/api/orders/"+testNumber, path)
 		})
 	}
+}
+
+func TestClientOrderInfoRejectsOversizedBody(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxResponseBytes+1))
+	})
+
+	_, err := client.OrderInfo(context.Background(), testNumber)
+
+	require.ErrorIs(t, err, ErrResponseTooLarge)
 }
