@@ -8,20 +8,32 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/logging"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
 	ordersroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/orders"
 )
 
 func (s *Server) setupRoutes() {
 	router := chi.NewRouter()
-
-	router.Use(logging.WithLogging(s.logger))
-	apiconfig.InstallErrorPolicy()
-	api := humachi.New(router, apiconfig.New())
-	authentication.RegisterRoutes(api, s.logger, s.authDeps, nil)
-	ordersroute.RegisterRoutes(api, s.logger, s.orderDeps, ordersroute.Options{
-		Middlewares: huma.Middlewares{authorization.Middleware(api, s.tokenParser)},
-	})
+	s.installMiddleware(router)
+	s.registerAPI(router)
 
 	s.router = router
+}
+
+func (s *Server) installMiddleware(router *chi.Mux) {
+	router.Use(logging.WithLogging(s.logger))
+}
+
+func (s *Server) registerAPI(router *chi.Mux) {
+	apiconfig.InstallErrorPolicy()
+	api := humachi.New(router, apiconfig.New())
+	authentication.RegisterRoutes(api, s.logger, s.authDeps, s.routeOptions())
+	ordersroute.RegisterRoutes(api, s.logger, s.orderDeps, s.routeOptions(
+		authorization.Middleware(api, s.tokenParser),
+	))
+}
+
+func (s *Server) routeOptions(middlewares ...func(huma.Context, func(huma.Context))) route.Options {
+	return route.Options{Middlewares: middlewares}
 }

@@ -20,6 +20,7 @@ func Validate(number string) error {
 	if number == "" {
 		return ErrEmptyNumber
 	}
+	// контрольная сумма одного нуля сходится, а Verify требует двух цифр
 	if number == "0" {
 		return nil
 	}

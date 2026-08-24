@@ -2,7 +2,6 @@ package orders
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -11,7 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
-	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
 	"github.com/shigabutdinoff/gophermart/internal/money"
 	"github.com/shigabutdinoff/gophermart/internal/order"
 )
@@ -41,9 +40,7 @@ type Deps struct {
 }
 
 // Options задаёт параметры публикации маршрутов заказов.
-type Options struct {
-	Middlewares huma.Middlewares
-}
+type Options = route.Options
 
 // uploadInput читает тело как есть, схема запроса заказу не нужна.
 type uploadInput struct {
@@ -63,13 +60,6 @@ type orderView struct {
 	UploadedAt time.Time     `json:"uploaded_at"`
 }
 
-// listOutput несёт готовое тело, huma сериализует поле Body даже для 204.
-type listOutput struct {
-	Status      int
-	ContentType string `header:"Content-Type"`
-	Body        []byte
-}
-
 // RegisterRoutes публикует маршруты заказов как huma-операции.
 func RegisterRoutes(
 	api huma.API,
@@ -77,15 +67,15 @@ func RegisterRoutes(
 	deps Deps,
 	options Options,
 ) {
-	registerUploadRoute(api, logger, deps.Upload, options.Middlewares)
-	registerListRoute(api, logger, deps.List, options.Middlewares)
+	registerUploadRoute(api, logger, deps.Upload, options)
+	registerListRoute(api, logger, deps.List, options)
 }
 
 func registerUploadRoute(
 	api huma.API,
 	logger *zap.Logger,
 	upload UploadFunc,
-	middlewares huma.Middlewares,
+	options Options,
 ) {
 	huma.Register(api, huma.Operation{
 		OperationID: "upload-order",
@@ -95,7 +85,7 @@ func registerUploadRoute(
 		// новый номер принят в обработку, повтор своего понижает статус
 		DefaultStatus:   http.StatusAccepted,
 		BodyReadTimeout: bodyReadTimeout,
-		Middlewares:     middlewares,
+		Middlewares:     options.Middlewares,
 		Errors: []int{
 			http.StatusBadRequest,
 			http.StatusUnauthorized,
@@ -104,9 +94,9 @@ func registerUploadRoute(
 			http.StatusInternalServerError,
 		},
 	}, func(ctx context.Context, in *uploadInput) (*uploadOutput, error) {
-		userID, ok := authorization.UserID(ctx)
-		if !ok {
-			return nil, huma.Error401Unauthorized(message.Unauthorized)
+		userID, err := authorization.RequireUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
 
 		switch err := upload(ctx, string(in.RawBody), userID); {
@@ -121,8 +111,7 @@ func registerUploadRoute(
 		case errors.Is(err, order.ErrOwnedByAnother):
 			return nil, huma.Error409Conflict(MessageNumberTaken)
 		default:
-			logger.Error("Не удалось принять номер заказа", zap.Error(err))
-			return nil, huma.Error500InternalServerError(message.Internal)
+			return nil, route.InternalError(logger, "Не удалось принять номер заказа", err)
 		}
 	})
 }
@@ -131,7 +120,7 @@ func registerListRoute(
 	api huma.API,
 	logger *zap.Logger,
 	list ListFunc,
-	middlewares huma.Middlewares,
+	options Options,
 ) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "list-orders",
@@ -139,37 +128,28 @@ func registerListRoute(
 		Path:          ordersPath,
 		Summary:       "Получение списка загруженных номеров заказов",
 		DefaultStatus: http.StatusOK,
-		Middlewares:   middlewares,
+		Middlewares:   options.Middlewares,
 		Errors: []int{
 			http.StatusUnauthorized,
 			http.StatusInternalServerError,
 		},
-	}, func(ctx context.Context, _ *struct{}) (*listOutput, error) {
-		userID, ok := authorization.UserID(ctx)
-		if !ok {
-			return nil, huma.Error401Unauthorized(message.Unauthorized)
+	}, func(ctx context.Context, _ *struct{}) (*route.JSONList, error) {
+		userID, err := authorization.RequireUserID(ctx)
+		if err != nil {
+			return nil, err
 		}
 
 		orders, err := list(ctx, userID)
 		if err != nil {
-			logger.Error("Не удалось получить список заказов", zap.Error(err))
-			return nil, huma.Error500InternalServerError(message.Internal)
-		}
-		if len(orders) == 0 {
-			return &listOutput{Status: http.StatusNoContent}, nil
+			return nil, route.InternalError(logger, "Не удалось получить список заказов", err)
 		}
 
-		body, err := json.Marshal(orderViews(orders))
+		response, err := route.JSONOrNoContent(orderViews(orders))
 		if err != nil {
-			logger.Error("Не удалось собрать список заказов", zap.Error(err))
-			return nil, huma.Error500InternalServerError(message.Internal)
+			return nil, route.InternalError(logger, "Не удалось собрать список заказов", err)
 		}
 
-		return &listOutput{
-			Status:      http.StatusOK,
-			ContentType: "application/json",
-			Body:        body,
-		}, nil
+		return response, nil
 	})
 }
 

@@ -23,18 +23,30 @@ func newErrorPolicyInstaller(target *errorFactory) func() {
 			msg string,
 			errs ...error,
 		) huma.StatusError {
-			if status == http.StatusUnprocessableEntity && msg == humaValidationErrorMessage && len(errs) > 0 && ctx != nil {
-				if operation := ctx.Operation(); operation != nil {
-					marked, _ := operation.Metadata[validationErrorsAsBadRequestKey].(bool)
-					if marked {
-						status = http.StatusBadRequest
-					}
-				}
+			if validationErrorsAreBadRequest(ctx, status, msg, errs) {
+				status = http.StatusBadRequest
 			}
 
 			return next(ctx, status, msg, errs...)
 		}
 	})
+}
+
+func validationErrorsAreBadRequest(ctx huma.Context, status int, msg string, errs []error) bool {
+	if ctx == nil ||
+		status != http.StatusUnprocessableEntity ||
+		msg != humaValidationErrorMessage ||
+		len(errs) == 0 {
+		return false
+	}
+
+	operation := ctx.Operation()
+	if operation == nil {
+		return false
+	}
+	marked, _ := operation.Metadata[validationErrorsAsBadRequestKey].(bool)
+
+	return marked
 }
 
 var installErrorPolicyOnce = newErrorPolicyInstaller(&huma.NewErrorWithContext)

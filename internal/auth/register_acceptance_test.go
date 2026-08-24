@@ -35,7 +35,7 @@ func registerHandler(register authentication.CredentialsFunc) http.Handler {
 		api,
 		zap.NewNop(),
 		authentication.Deps{Register: register},
-		nil,
+		authentication.Options{},
 	)
 
 	return router

@@ -16,7 +16,7 @@ func TestRouteHelpersRegisterOnlyOwnMethod(t *testing.T) {
 	t.Run("загрузка", func(t *testing.T) {
 		api := humachi.New(chi.NewRouter(), apiconfig.New())
 
-		registerUploadRoute(api, zap.NewNop(), nil, nil)
+		registerUploadRoute(api, zap.NewNop(), nil, Options{})
 
 		path := api.OpenAPI().Paths[ordersPath]
 		require.NotNil(t, path)
@@ -27,7 +27,7 @@ func TestRouteHelpersRegisterOnlyOwnMethod(t *testing.T) {
 	t.Run("список", func(t *testing.T) {
 		api := humachi.New(chi.NewRouter(), apiconfig.New())
 
-		registerListRoute(api, zap.NewNop(), nil, nil)
+		registerListRoute(api, zap.NewNop(), nil, Options{})
 
 		path := api.OpenAPI().Paths[ordersPath]
 		require.NotNil(t, path)

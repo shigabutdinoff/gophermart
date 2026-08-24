@@ -30,7 +30,7 @@ func newRouter(logger *zap.Logger, deps Deps) http.Handler {
 	router := chi.NewRouter()
 	apiconfig.InstallErrorPolicy()
 	api := humachi.New(router, apiconfig.New())
-	RegisterRoutes(api, logger, deps, nil)
+	RegisterRoutes(api, logger, deps, Options{})
 
 	return router
 }

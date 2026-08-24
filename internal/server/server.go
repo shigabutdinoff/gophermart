@@ -62,26 +62,45 @@ func newServer(
 	}
 	cfg.JWTSecret = ""
 
-	users := userrepository.New(gormDB)
-	passwords := auth.Argon2Passwords{}
-	registration := auth.NewRegisterService(users, passwords, tokens)
-	login, err := auth.NewLoginService(logger, users, passwords, tokens)
+	authDeps, err := buildAuthDeps(logger, gormDB, tokens)
 	if err != nil {
 		return nil, err
 	}
-	storedOrders := orderrepository.New(gormDB)
-	orderUpload := order.NewUploadService(storedOrders)
-	orderList := order.NewListService(storedOrders)
 
 	server := &Server{
 		logger:          logger,
 		shutdownTimeout: DefaultShutdownTimeout,
 		sqlDB:           sqlDB,
-		authDeps:        authentication.Deps{Register: registration.Register, Login: login.Login},
-		orderDeps:       ordersroute.Deps{Upload: orderUpload.Upload, List: orderList.List},
+		authDeps:        authDeps,
+		orderDeps:       buildOrderDeps(gormDB),
 		tokenParser:     tokens.ParseRequest,
 		Config:          cfg,
 	}
 	server.setupRoutes()
 	return server, nil
+}
+
+func buildAuthDeps(
+	logger *zap.Logger,
+	gormDB *gorm.DB,
+	tokens *auth.JWTManager,
+) (authentication.Deps, error) {
+	users := userrepository.New(gormDB)
+	passwords := auth.Argon2Passwords{}
+	registration := auth.NewRegisterService(users, passwords, tokens)
+	login, err := auth.NewLoginService(logger, users, passwords, tokens)
+	if err != nil {
+		return authentication.Deps{}, err
+	}
+
+	return authentication.Deps{Register: registration.Register, Login: login.Login}, nil
+}
+
+func buildOrderDeps(gormDB *gorm.DB) ordersroute.Deps {
+	storedOrders := orderrepository.New(gormDB)
+
+	return ordersroute.Deps{
+		Upload: order.NewUploadService(storedOrders).Upload,
+		List:   order.NewListService(storedOrders).List,
+	}
 }
