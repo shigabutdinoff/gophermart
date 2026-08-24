@@ -21,7 +21,7 @@ import (
 )
 
 func serveList(handler http.Handler) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodGet, "/api/user/orders", nil)
+	req := httptest.NewRequest(http.MethodGet, ordersPath, nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, req)
 
@@ -115,7 +115,7 @@ func TestListAnswersWithoutData(t *testing.T) {
 
 func TestListPassesFilterWithUnknownBodyLength(t *testing.T) {
 	deps := listReturning(nil, nil, nil)
-	req := httptest.NewRequest(http.MethodGet, "/api/user/orders", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, ordersPath, http.NoBody)
 	// клиент с chunked-кодировкой не сообщает длину тела
 	req.ContentLength = -1
 	req.TransferEncoding = []string{"chunked"}

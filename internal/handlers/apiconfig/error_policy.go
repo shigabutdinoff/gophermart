@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/go-chi/chi/v5"
 )
 
 const (
@@ -64,4 +66,12 @@ func InstallErrorPolicy() {
 // входят в предусмотренный ТЗ ответ 400 вместо стандартного ответа huma 422.
 func ValidationErrorsAsBadRequest() map[string]any {
 	return map[string]any{validationErrorsAsBadRequestKey: true}
+}
+
+// NewAPI собирает API сервиса вместе с политикой ошибок.
+// Без неё ошибки схемы ушли бы клиенту статусом 422 вместо 400.
+func NewAPI(router chi.Router) huma.API {
+	InstallErrorPolicy()
+
+	return humachi.New(router, New())
 }

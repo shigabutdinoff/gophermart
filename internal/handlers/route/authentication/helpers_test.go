@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,8 +27,7 @@ var handlerTestToken = auth.IssuedToken{
 // newRouter собирает маршруты так же, как это делает сервер.
 func newRouter(logger *zap.Logger, deps Deps) http.Handler {
 	router := chi.NewRouter()
-	apiconfig.InstallErrorPolicy()
-	api := humachi.New(router, apiconfig.New())
+	api := apiconfig.NewAPI(router)
 	RegisterRoutes(api, logger, deps, Options{})
 
 	return router
@@ -48,11 +46,11 @@ func serve(handler http.Handler, path, contentType, body string) *httptest.Respo
 }
 
 func serveRegister(deps Deps, contentType, body string) *httptest.ResponseRecorder {
-	return serve(newRouter(zap.NewNop(), deps), "/api/user/register", contentType, body)
+	return serve(newRouter(zap.NewNop(), deps), registerPath, contentType, body)
 }
 
 func serveLogin(deps Deps, contentType, body string) *httptest.ResponseRecorder {
-	return serve(newRouter(zap.NewNop(), deps), "/api/user/login", contentType, body)
+	return serve(newRouter(zap.NewNop(), deps), loginPath, contentType, body)
 }
 
 // registerReturning собирает зависимости регистрации с заданным исходом.

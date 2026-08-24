@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,8 +28,7 @@ import (
 // registerHandler собирает маршрут регистрации так же, как это делает сервер.
 func registerHandler(register authentication.CredentialsFunc) http.Handler {
 	router := chi.NewRouter()
-	apiconfig.InstallErrorPolicy()
-	api := humachi.New(router, apiconfig.New())
+	api := apiconfig.NewAPI(router)
 	authentication.RegisterRoutes(
 		api,
 		zap.NewNop(),

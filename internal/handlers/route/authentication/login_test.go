@@ -19,7 +19,7 @@ func TestLogin_UnknownLoginAndWrongPasswordShareBody(t *testing.T) {
 
 	bodies := make([]string, 0, 2)
 	for _, login := range []string{"unknown", "known"} {
-		response := serve(handler, "/api/user/login", "application/json",
+		response := serve(handler, loginPath, "application/json",
 			`{"login":"`+login+`","password":"password"}`)
 
 		require.Equal(t, http.StatusUnauthorized, response.Code)

@@ -2,7 +2,6 @@ package server
 
 import (
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
@@ -26,8 +25,7 @@ func (s *Server) installMiddleware(router *chi.Mux) {
 }
 
 func (s *Server) registerAPI(router *chi.Mux) {
-	apiconfig.InstallErrorPolicy()
-	api := humachi.New(router, apiconfig.New())
+	api := apiconfig.NewAPI(router)
 	authentication.RegisterRoutes(api, s.logger, s.authDeps, s.routeOptions())
 	ordersroute.RegisterRoutes(api, s.logger, s.orderDeps, s.routeOptions(
 		authorization.Middleware(api, s.tokenParser),

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +21,7 @@ import (
 )
 
 func serveUpload(handler http.Handler, contentType, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/api/user/orders", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, ordersPath, strings.NewReader(body))
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -145,7 +144,7 @@ func TestUploadAcceptsBodyWithoutContentType(t *testing.T) {
 }
 
 func TestUploadKeepsBodyReadDeadline(t *testing.T) {
-	api := humachi.New(chi.NewRouter(), apiconfig.New())
+	api := apiconfig.NewAPI(chi.NewRouter())
 	RegisterRoutes(api, zap.NewNop(), Deps{}, Options{})
 
 	operation := api.OpenAPI().Paths[ordersPath].Post
@@ -154,7 +153,7 @@ func TestUploadKeepsBodyReadDeadline(t *testing.T) {
 }
 
 func TestUploadOperationDoesNotAdvertiseNotFound(t *testing.T) {
-	api := humachi.New(chi.NewRouter(), apiconfig.New())
+	api := apiconfig.NewAPI(chi.NewRouter())
 	RegisterRoutes(api, zap.NewNop(), Deps{}, Options{})
 
 	operation := api.OpenAPI().Paths[ordersPath].Post

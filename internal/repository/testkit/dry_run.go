@@ -90,7 +90,7 @@ func NewDryRunDB(t testing.TB) *gorm.DB {
 	gormDB.Config.ConnPool = pool
 	gormDB.Statement.ConnPool = pool
 	requireCallback(t, gormDB.Callback().Create().After("gorm:create").Register(
-		"testkit:dry-run-create-result",
+		createResultKey,
 		func(tx *gorm.DB) {
 			result := createResult{rowsAffected: 1}
 			if configured, ok := tx.Get(createResultKey); ok {
@@ -105,7 +105,7 @@ func NewDryRunDB(t testing.TB) *gorm.DB {
 		},
 	))
 	requireCallback(t, gormDB.Callback().Query().After("gorm:query").Register(
-		"testkit:dry-run-query-result",
+		queryResultKey,
 		func(tx *gorm.DB) {
 			configured, ok := tx.Get(queryResultKey)
 			if !ok {

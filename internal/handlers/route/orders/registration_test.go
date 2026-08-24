@@ -3,7 +3,6 @@ package orders
 import (
 	"testing"
 
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,7 +13,7 @@ import (
 
 func TestRouteHelpersRegisterOnlyOwnMethod(t *testing.T) {
 	t.Run("загрузка", func(t *testing.T) {
-		api := humachi.New(chi.NewRouter(), apiconfig.New())
+		api := apiconfig.NewAPI(chi.NewRouter())
 
 		registerUploadRoute(api, zap.NewNop(), nil, Options{})
 
@@ -25,7 +24,7 @@ func TestRouteHelpersRegisterOnlyOwnMethod(t *testing.T) {
 	})
 
 	t.Run("список", func(t *testing.T) {
-		api := humachi.New(chi.NewRouter(), apiconfig.New())
+		api := apiconfig.NewAPI(chi.NewRouter())
 
 		registerListRoute(api, zap.NewNop(), nil, Options{})
 

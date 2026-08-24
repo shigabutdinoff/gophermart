@@ -27,7 +27,7 @@ func TestHandlersLogInternalErrors(t *testing.T) {
 			run: func(logger *zap.Logger, err error) *httptest.ResponseRecorder {
 				deps := registerReturning(auth.IssuedToken{}, err, nil)
 				return serve(newRouter(logger, deps),
-					"/api/user/register", "application/json",
+					registerPath, "application/json",
 					`{"login":"user","password":"password"}`)
 			},
 		},
@@ -36,7 +36,7 @@ func TestHandlersLogInternalErrors(t *testing.T) {
 			run: func(logger *zap.Logger, err error) *httptest.ResponseRecorder {
 				deps := loginReturning(auth.IssuedToken{}, err, nil)
 				return serve(newRouter(logger, deps),
-					"/api/user/login", "application/json",
+					loginPath, "application/json",
 					`{"login":"user","password":"password"}`)
 			},
 		},
@@ -63,11 +63,11 @@ func TestHandlersDoNotLogClientErrors(t *testing.T) {
 
 	serve(
 		newRouter(logger, registerReturning(auth.IssuedToken{}, auth.ErrLoginTaken, nil)),
-		"/api/user/register", "application/json", `{"login":"user","password":"password"}`,
+		registerPath, "application/json", `{"login":"user","password":"password"}`,
 	)
 	serve(
 		newRouter(logger, loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials, nil)),
-		"/api/user/login", "application/json", `{"login":"user","password":"password"}`,
+		loginPath, "application/json", `{"login":"user","password":"password"}`,
 	)
 
 	assert.Zero(t, logs.Len())
@@ -91,7 +91,7 @@ func TestRoutes_StatusesStayWithinSpecification(t *testing.T) {
 	}
 
 	for _, body := range bodies {
-		for _, path := range []string{"/api/user/register", "/api/user/login"} {
+		for _, path := range []string{registerPath, loginPath} {
 			deps := Deps{
 				Register: func(context.Context, auth.Credentials) (auth.IssuedToken, error) {
 					return handlerTestToken, nil

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/golang-jwt/jwt/v5/request"
@@ -51,8 +50,7 @@ func serveAuthorizedWith(
 
 	result := middlewareResult{}
 	router := chi.NewRouter()
-	apiconfig.InstallErrorPolicy()
-	api := humachi.New(router, apiconfig.New())
+	api := apiconfig.NewAPI(router)
 	huma.Register(api, huma.Operation{
 		OperationID: "authorization-test",
 		Method:      http.MethodGet,
