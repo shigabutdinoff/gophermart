@@ -12,6 +12,7 @@ import (
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
+	"github.com/shigabutdinoff/gophermart/internal/money"
 	"github.com/shigabutdinoff/gophermart/internal/order"
 )
 
@@ -54,11 +55,12 @@ type uploadOutput struct {
 	Status int
 }
 
-// orderView описывает заказ в выдаче, поле accrual появится с начислениями.
+// orderView скрывает через omitempty только отсутствующее начисление.
 type orderView struct {
-	Number     string       `json:"number"`
-	Status     order.Status `json:"status"`
-	UploadedAt time.Time    `json:"uploaded_at"`
+	Number     string        `json:"number"`
+	Status     order.Status  `json:"status"`
+	Accrual    *money.Points `json:"accrual,omitempty"`
+	UploadedAt time.Time     `json:"uploaded_at"`
 }
 
 // listOutput несёт готовое тело, huma сериализует поле Body даже для 204.
@@ -177,6 +179,7 @@ func orderViews(orders []order.Order) []orderView {
 		views[i] = orderView{
 			Number:     stored.Number,
 			Status:     stored.Status,
+			Accrual:    stored.Accrual,
 			UploadedAt: stored.UploadedAt,
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"github.com/shigabutdinoff/gophermart/internal/money"
 	domain "github.com/shigabutdinoff/gophermart/internal/order"
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
@@ -51,6 +52,7 @@ func TestRepository_CreateOrFindOwnerStoresNewOrderWithContext(t *testing.T) {
 	assert.Equal(t, "12345678903", destination.Number)
 	assert.Equal(t, int64(42), destination.UserID)
 	assert.Equal(t, domain.StatusNew, destination.Status)
+	assert.Nil(t, destination.Accrual)
 	assert.False(t, destination.UploadedAt.IsZero())
 	assert.Contains(t, query, `ON CONFLICT ("number") DO NOTHING`)
 }
@@ -147,6 +149,7 @@ func TestRepository_CreateOrFindOwnerKeepsMissingRowAsStorageError(t *testing.T)
 func TestRepository_ListByUserReturnsStoredOrders(t *testing.T) {
 	gormDB := newDryRunDB(t)
 	uploadedAt := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC)
+	accrued := money.Points(50050)
 	var query string
 	var variables []any
 	require.NoError(t, gormDB.Callback().Query().After("gorm:query").Register(
@@ -160,6 +163,7 @@ func TestRepository_ListByUserReturnsStoredOrders(t *testing.T) {
 					UserID:     42,
 					Status:     domain.StatusProcessed,
 					UploadedAt: uploadedAt,
+					Accrual:    &accrued,
 				}}
 			}
 		},
@@ -173,6 +177,7 @@ func TestRepository_ListByUserReturnsStoredOrders(t *testing.T) {
 		UserID:     42,
 		Status:     domain.StatusProcessed,
 		UploadedAt: uploadedAt,
+		Accrual:    &accrued,
 	}}, list)
 	assert.Contains(t, query, `WHERE user_id = $1`)
 	assert.Contains(t, query, `ORDER BY uploaded_at DESC, id DESC`)

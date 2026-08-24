@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
+	"github.com/shigabutdinoff/gophermart/internal/money"
 	"github.com/shigabutdinoff/gophermart/internal/order"
 )
 
@@ -78,6 +79,28 @@ func TestListReturnsOrdersOfUser(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotContains(t, body[i], "accrual")
 	}
+}
+
+func TestListReturnsAccrual(t *testing.T) {
+	uploadedAt := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	accrued := money.Points(50050)
+	zero := money.Points(0)
+	deps := listReturning([]order.Order{
+		{Number: "9278923470", Status: order.StatusProcessed, UploadedAt: uploadedAt, Accrual: &accrued},
+		{Number: "9278923471", Status: order.StatusProcessed, UploadedAt: uploadedAt, Accrual: &zero},
+		{Number: testNumber, Status: order.StatusNew, UploadedAt: uploadedAt},
+	}, nil, nil)
+
+	response := serveList(newRouter(zap.NewNop(), deps, testUserID))
+
+	require.Equal(t, http.StatusOK, response.Code)
+	var body []map[string]any
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+	require.Len(t, body, 3)
+	assert.InDelta(t, 500.5, body[0]["accrual"], 1e-9)
+	assert.InDelta(t, 0, body[1]["accrual"], 1e-9)
+	assert.Contains(t, body[1], "accrual")
+	assert.NotContains(t, body[2], "accrual")
 }
 
 func TestListAnswersWithoutData(t *testing.T) {

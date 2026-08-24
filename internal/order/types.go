@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/shigabutdinoff/gophermart/internal/money"
 )
 
 var (
@@ -28,6 +30,8 @@ type Order struct {
 	UserID     int64
 	Status     Status
 	UploadedAt time.Time
+	// nil отличает отсутствие начисления от начисленного нуля
+	Accrual *money.Points
 }
 
 type CreateOutcome uint8

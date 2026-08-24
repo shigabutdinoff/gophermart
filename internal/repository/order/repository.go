@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/shigabutdinoff/gophermart/internal/money"
 	domain "github.com/shigabutdinoff/gophermart/internal/order"
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
@@ -21,6 +22,7 @@ type orderRow struct {
 	UserID     int64         `gorm:"column:user_id"`
 	Status     domain.Status `gorm:"column:status"`
 	UploadedAt time.Time     `gorm:"column:uploaded_at;autoCreateTime"`
+	Accrual    *money.Points `gorm:"column:accrual"`
 }
 
 func (r orderRow) order() domain.Order {
@@ -29,6 +31,7 @@ func (r orderRow) order() domain.Order {
 		UserID:     r.UserID,
 		Status:     r.Status,
 		UploadedAt: r.UploadedAt,
+		Accrual:    r.Accrual,
 	}
 }
 
