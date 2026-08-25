@@ -18,11 +18,28 @@ func clearEnv(t *testing.T) {
 		"ACCRUAL_SYSTEM_ADDRESS",
 		"REQUEST_BODY_LIMIT",
 		"JWT_SECRET",
+		"QUEUE_NAME", "QUEUE_WORKERS", "QUEUE_FETCH_POLL_INTERVAL",
+		"QUEUE_ACCRUAL_POLL_INTERVAL", "QUEUE_THROTTLE_BACKOFF", "QUEUE_MAX_ATTEMPTS",
 	} {
 		// t.Setenv запоминает исходное состояние, Unsetenv очищает на время теста
 		t.Setenv(name, "")
 		require.NoError(t, os.Unsetenv(name))
 	}
+}
+
+func TestParseQueueSettingsFromEnvironment(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("QUEUE_NAME", " orders ")
+	t.Setenv("QUEUE_WORKERS", "8")
+	t.Setenv("QUEUE_FETCH_POLL_INTERVAL", "250ms")
+	t.Setenv("QUEUE_ACCRUAL_POLL_INTERVAL", "3s")
+	t.Setenv("QUEUE_THROTTLE_BACKOFF", "30s")
+	t.Setenv("QUEUE_MAX_ATTEMPTS", "3")
+
+	cfg, err := Parse(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "orders", cfg.Queue.Name)
+	assert.Equal(t, 8, cfg.Queue.Workers)
 }
 
 func TestParse_JWTSecretComesOnlyFromEnvironment(t *testing.T) {

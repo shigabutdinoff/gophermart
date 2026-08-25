@@ -2,7 +2,11 @@ package gophermart
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
+
+	"github.com/riverqueue/river"
 )
 
 // Значения параметров запуска по умолчанию.
@@ -36,12 +40,12 @@ type Config struct {
 
 // QueueConfig настраивает очередь заданий и повторы опроса расчёта.
 type QueueConfig struct {
-	Name                string
-	Workers             int
-	FetchPollInterval   time.Duration
-	AccrualPollInterval time.Duration
-	ThrottleBackoff     time.Duration
-	MaxAttempts         int
+	Name                string        `env:"QUEUE_NAME"`
+	Workers             int           `env:"QUEUE_WORKERS"`
+	FetchPollInterval   time.Duration `env:"QUEUE_FETCH_POLL_INTERVAL"`
+	AccrualPollInterval time.Duration `env:"QUEUE_ACCRUAL_POLL_INTERVAL"`
+	ThrottleBackoff     time.Duration `env:"QUEUE_THROTTLE_BACKOFF"`
+	MaxAttempts         int           `env:"QUEUE_MAX_ATTEMPTS"`
 }
 
 // Default возвращает конфигурацию со значениями по умолчанию.
@@ -60,6 +64,18 @@ func Default() Config {
 	}
 }
 
+// maxQueueNameLength повторяет предел очереди на длину имени.
+const maxQueueNameLength = 64
+
+// queueNameRegexp повторяет требование очереди к имени: иначе она
+// отказала бы уже в работе, а не при разборе конфигурации.
+var queueNameRegexp = regexp.MustCompile(`^[a-z0-9]+(?:[_-][a-z0-9]+)*$`)
+
+// normalize приводит значения к виду, в котором их ждут потребители.
+func (c *Config) normalize() {
+	c.Queue.Name = strings.TrimSpace(c.Queue.Name)
+}
+
 // validate проверяет корректность значений конфигурации.
 func (c Config) validate() error {
 	if c.RunAddress == "" {
@@ -67,6 +83,40 @@ func (c Config) validate() error {
 	}
 	if c.RequestBodyLimit <= 0 {
 		return fmt.Errorf("request body limit must be positive")
+	}
+
+	return c.Queue.validate()
+}
+
+func (q QueueConfig) validate() error {
+	if q.Name == "" {
+		return fmt.Errorf("queue name must not be empty")
+	}
+	if len(q.Name) > maxQueueNameLength {
+		return fmt.Errorf("queue name must be at most %d characters", maxQueueNameLength)
+	}
+	if !queueNameRegexp.MatchString(q.Name) {
+		return fmt.Errorf("queue name %q must match %s", q.Name, queueNameRegexp)
+	}
+	if q.Workers <= 0 {
+		return fmt.Errorf("queue workers must be positive")
+	}
+	// предел очереди: иначе она отказала бы уже при сборке клиента
+	if q.Workers > river.QueueNumWorkersMax {
+		return fmt.Errorf("queue workers must be at most %d", river.QueueNumWorkersMax)
+	}
+	if q.MaxAttempts <= 0 {
+		return fmt.Errorf("queue max attempts must be positive")
+	}
+	if q.FetchPollInterval < 100*time.Millisecond {
+		return fmt.Errorf("queue fetch poll interval must be at least 100ms")
+	}
+
+	if q.AccrualPollInterval <= 0 {
+		return fmt.Errorf("queue accrual poll interval must be positive")
+	}
+	if q.ThrottleBackoff <= 0 {
+		return fmt.Errorf("queue throttle backoff must be positive")
 	}
 	return nil
 }

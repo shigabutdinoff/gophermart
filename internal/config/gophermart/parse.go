@@ -35,6 +35,7 @@ func Parse(args []string) (Config, error) {
 		return Config{}, fmt.Errorf("parse environment: %w", err)
 	}
 	parsed.apply(&cfg)
+	cfg.normalize()
 
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
