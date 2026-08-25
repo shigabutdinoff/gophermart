@@ -45,6 +45,19 @@ func TestParse_Defaults(t *testing.T) {
 	assert.Equal(t, Default(), cfg)
 }
 
+func TestDefaultKeepsQueueSettings(t *testing.T) {
+	cfg := Default()
+
+	assert.Equal(t, QueueConfig{
+		Name:                DefaultQueueName,
+		Workers:             DefaultQueueWorkers,
+		FetchPollInterval:   DefaultQueueFetchPollInterval,
+		AccrualPollInterval: DefaultQueueAccrualPollInterval,
+		ThrottleBackoff:     DefaultQueueThrottleBackoff,
+		MaxAttempts:         DefaultQueueMaxAttempts,
+	}, cfg.Queue)
+}
+
 func TestParse_EnvironmentOverridesDefaults(t *testing.T) {
 	t.Setenv("RUN_ADDRESS", "env:1")
 	t.Setenv("DATABASE_URI", "env-db")

@@ -41,10 +41,12 @@ type Inserter interface {
 // Dispatcher ставит задание на опрос расчёта в транзакцию загрузки заказа.
 type Dispatcher struct {
 	queue Inserter
+	name  string
 }
 
-func NewDispatcher(queue Inserter) *Dispatcher {
-	return &Dispatcher{queue: queue}
+// NewDispatcher ставит задания в названную очередь, пустое имя отдаёт выбор ей.
+func NewDispatcher(queue Inserter, name string) *Dispatcher {
+	return &Dispatcher{queue: queue, name: name}
 }
 
 // Push кладёт задание той же транзакцией, что и вставку заказа: gorm держит
@@ -56,33 +58,35 @@ func (d *Dispatcher) Push(ctx context.Context, tx *gorm.DB, number string) error
 	}
 
 	args := CheckAccrualArgs{Number: number}
-	if _, err := d.queue.InsertTx(ctx, sqlTx, args, nil); err != nil {
+	options := &river.InsertOpts{Queue: d.name}
+	if _, err := d.queue.InsertTx(ctx, sqlTx, args, options); err != nil {
 		return fmt.Errorf("dispatch %s: %w", CheckAccrualArgs{}.Kind(), err)
 	}
 
 	return nil
 }
 
-// DefaultPollInterval отделяет опросы расчёта, пока он не довёл заказ.
-const DefaultPollInterval = time.Second
-
 // AccrualClient опрашивает внешнюю систему расчёта по номеру заказа.
 type AccrualClient interface {
 	OrderInfo(ctx context.Context, number string) (accrual.OrderInfo, error)
 }
 
-// CheckAccrualOptions задаёт паузу между опросами расчёта.
+// CheckAccrualOptions задаёт паузу между опросами и отсрочку после отказа.
 type CheckAccrualOptions struct {
-	PollInterval time.Duration
+	PollInterval    time.Duration
+	ThrottleBackoff time.Duration
+	Throttle        Throttler
 }
 
 // CheckAccrual доводит заказ до окончательного статуса, опрашивая расчёт.
 type CheckAccrual struct {
 	river.WorkerDefaults[CheckAccrualArgs]
-	logger       *zap.Logger
-	client       AccrualClient
-	orders       order.ResultWriter
-	pollInterval time.Duration
+	logger          *zap.Logger
+	client          AccrualClient
+	orders          order.ResultWriter
+	pollInterval    time.Duration
+	throttleBackoff time.Duration
+	throttle        Throttler
 }
 
 func NewCheckAccrual(
@@ -91,17 +95,24 @@ func NewCheckAccrual(
 	orders order.ResultWriter,
 	options CheckAccrualOptions,
 ) *CheckAccrual {
-	if options.PollInterval <= 0 {
-		options.PollInterval = DefaultPollInterval
+	if options.Throttle == nil {
+		options.Throttle = idleThrottle{}
 	}
 
 	return &CheckAccrual{
-		logger:       logger,
-		client:       client,
-		orders:       orders,
-		pollInterval: options.PollInterval,
+		logger:          logger,
+		client:          client,
+		orders:          orders,
+		pollInterval:    options.PollInterval,
+		throttleBackoff: options.ThrottleBackoff,
+		throttle:        options.Throttle,
 	}
 }
+
+// idleThrottle подходит там, где очередь тормозить нечем, например в тестах.
+type idleThrottle struct{}
+
+func (idleThrottle) Pause(context.Context, time.Duration) {}
 
 // Work опрашивает расчёт и переводит исход в судьбу заказа и задания.
 // Пока расчёт не отказал, задание снузится: снуз не тратит попыток очереди,
@@ -110,6 +121,10 @@ func (c *CheckAccrual) Work(ctx context.Context, job *river.Job[CheckAccrualArgs
 	number := job.Args.Number
 	info, err := c.client.OrderInfo(ctx, number)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		return c.handleClientError(ctx, number, err)
 	}
 
@@ -138,8 +153,11 @@ func (c *CheckAccrual) giveUp(ctx context.Context, number string, cause error) e
 }
 
 // applyResult возвращает задание к опросу, пока расчёт не закончен.
-// Строку заказа выбирает номер задания: ответу расчёта тут доверия нет.
-func (c *CheckAccrual) applyResult(ctx context.Context, number string, info accrual.OrderInfo) error {
+func (c *CheckAccrual) applyResult(
+	ctx context.Context,
+	number string,
+	info accrual.OrderInfo,
+) error {
 	finished, err := c.orders.ApplyResult(ctx, number, info.Status, info.Accrual)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -167,10 +185,18 @@ func (c *CheckAccrual) applyResult(ctx context.Context, number string, info accr
 }
 
 // handleClientError отделяет исходы, которые повтор уже не исправит.
-func (c *CheckAccrual) handleClientError(ctx context.Context, number string, err error) error {
+func (c *CheckAccrual) handleClientError(
+	ctx context.Context,
+	number string,
+	err error,
+) error {
 	// заказ ещё не зарегистрирован в системе расчёта
 	if errors.Is(err, accrual.ErrNotRegistered) {
 		return river.JobSnooze(c.pollInterval)
+	}
+	// отказ по частоте касается не одного заказа, опрос отходит в сторону весь
+	if refusal, ok := errors.AsType[*accrual.TooManyRequestsError](err); ok {
+		return c.waitOutRefusal(ctx, number, refusal.RetryAfter)
 	}
 	if isPermanent(err) {
 		c.logger.Error(
@@ -191,12 +217,34 @@ func (c *CheckAccrual) handleClientError(ctx context.Context, number string, err
 	return river.JobSnooze(c.pollInterval)
 }
 
+// waitOutRefusal придерживает всю очередь: отказ касается не одного заказа.
+func (c *CheckAccrual) waitOutRefusal(
+	ctx context.Context,
+	number string,
+	retryAfter time.Duration,
+) error {
+	pause := retryAfter
+	if pause <= 0 {
+		pause = c.throttleBackoff
+	}
+	c.logger.Warn(
+		"Система расчёта отказала по частоте запросов",
+		zap.String("order", number),
+		zap.Duration("pause", pause),
+	)
+	c.throttle.Pause(ctx, pause)
+
+	return river.JobSnooze(pause)
+}
+
 // isPermanent помечает ответы, ради которых заказ опрашивать больше незачем.
+// Отказ по частоте сюда не доходит, клиент отдаёт его отдельным типом.
 func isPermanent(err error) bool {
 	if errors.Is(err, accrual.ErrMalformedResponse) || errors.Is(err, accrual.ErrUnknownStatus) {
 		return true
 	}
 	unexpected, ok := errors.AsType[*accrual.UnexpectedStatusError](err)
 
-	return ok && unexpected.StatusCode < http.StatusInternalServerError
+	return ok && unexpected.StatusCode >= http.StatusBadRequest &&
+		unexpected.StatusCode < http.StatusInternalServerError
 }

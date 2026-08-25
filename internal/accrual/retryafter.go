@@ -2,7 +2,6 @@ package accrual
 
 import (
 	"errors"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,8 +11,10 @@ import (
 // retryAfterHeader сообщает задержку вместе с кодом 429.
 const retryAfterHeader = "Retry-After"
 
-// maxRetryAfterSeconds ограничивает секунды заголовка пределом time.Duration.
-const maxRetryAfterSeconds = math.MaxInt64 / int64(time.Second)
+const (
+	maxRetryAfter        = time.Hour
+	maxRetryAfterSeconds = int64(maxRetryAfter / time.Second)
+)
 
 // retryAfter читает задержку из заголовка в секундах или в формате HTTP-даты.
 // Ноль означает, что задержка не названа или уже истекла.
@@ -32,7 +33,7 @@ func retryAfter(header http.Header) time.Duration {
 		return time.Duration(bounded) * time.Second
 	}
 	if date, err := http.ParseTime(value); err == nil {
-		return max(0, time.Until(date))
+		return max(0, min(time.Until(date), maxRetryAfter))
 	}
 
 	return 0

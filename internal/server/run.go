@@ -81,9 +81,7 @@ func (s *Server) queueActor(ctx context.Context) (func() error, func(error)) {
 		}, func(error) {
 			interruptOnce.Do(func() {
 				close(interrupted)
-				if !s.deps.runner.Started() {
-					cancelStart()
-				}
+				cancelStart()
 			})
 		}
 }

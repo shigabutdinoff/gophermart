@@ -1,13 +1,41 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 )
+
+func successfulTestMigration(context.Context, *sql.DB) error {
+	return nil
+}
+
+func notify(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func receiveWithin[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(time.Second):
+		require.FailNow(t, "канал не ответил вовремя")
+		var zero T
+
+		return zero
+	}
+}
 
 const testJWTSecret = "0123456789abcdef0123456789abcdef"
 

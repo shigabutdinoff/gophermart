@@ -166,9 +166,6 @@ func TestClientOrderInfoLeavesUnnamedRetryAfterToCaller(t *testing.T) {
 }
 
 func TestRetryAfter(t *testing.T) {
-	// заголовок дальше этого срока не уложится в time.Duration
-	maxDelay := time.Duration(maxRetryAfterSeconds) * time.Second
-
 	// заголовок ставится по указателю, иначе пустое значение неотличимо от его отсутствия
 	value := func(header string) *string { return &header }
 
@@ -178,13 +175,13 @@ func TestRetryAfter(t *testing.T) {
 		want   time.Duration
 	}{
 		{name: "секунды", header: value("60"), want: time.Minute},
-		{name: "часы", header: value("7200"), want: 2 * time.Hour},
-		{name: "переполняющее число секунд", header: value("10000000000000"), want: maxDelay},
+		{name: "часы", header: value("7200"), want: maxRetryAfter},
+		{name: "переполняющее число секунд", header: value("10000000000000"), want: maxRetryAfter},
 		{
 			// ParseInt на переполнении отдаёт край int64 вместе с ErrRange
 			name:   "секунды за пределом int64",
 			header: value("99999999999999999999"),
-			want:   maxDelay,
+			want:   maxRetryAfter,
 		},
 		{name: "отрицательные секунды за пределом int64", header: value("-99999999999999999999")},
 		{name: "ноль секунд", header: value("0")},
@@ -223,6 +220,13 @@ func TestRetryAfterUsesRemainingTimeUntilHTTPDate(t *testing.T) {
 
 	assert.LessOrEqual(t, delay, before)
 	assert.GreaterOrEqual(t, delay, after)
+}
+
+func TestRetryAfterClampsFutureHTTPDate(t *testing.T) {
+	date := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+	header := http.Header{"Retry-After": {date.Format(http.TimeFormat)}}
+
+	assert.Equal(t, maxRetryAfter, retryAfter(header))
 }
 
 func TestClientOrderInfoUnexpectedStatusCode(t *testing.T) {
