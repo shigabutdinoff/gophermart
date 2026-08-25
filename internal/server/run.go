@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 
 	"github.com/oklog/run"
 	"go.uber.org/zap"
@@ -46,6 +47,9 @@ func (s *Server) Run(ctx context.Context) error {
 		// обслуживание прервалось само, соединения закрываются принудительно
 		_ = s.srv.Close()
 	})
+	if s.deps.runner != nil {
+		group.Add(s.queueActor(ctx))
+	}
 	group.Add(run.ContextHandler(ctx))
 	s.logger.Info("Сервер запущен", zap.String("address", s.Addr()))
 
@@ -55,5 +59,44 @@ func (s *Server) Run(ctx context.Context) error {
 		err = nil
 	}
 
+	s.stopQueue()
+
 	return errors.Join(err, shutdownErr)
+}
+
+// queueActor запускает очередь один раз и держит её в группе до остановки.
+// Ошибка очереди не останавливает HTTP-сервис.
+func (s *Server) queueActor(ctx context.Context) (func() error, func(error)) {
+	interrupted := make(chan struct{})
+	startCtx, cancelStart := context.WithCancel(context.WithoutCancel(ctx))
+	var interruptOnce sync.Once
+
+	return func() error {
+			if err := s.deps.runner.Start(startCtx); err != nil {
+				s.logger.Error("Не удалось запустить очередь заданий", zap.Error(err))
+			}
+			<-interrupted
+
+			return nil
+		}, func(error) {
+			interruptOnce.Do(func() {
+				close(interrupted)
+				if !s.deps.runner.Started() {
+					cancelStart()
+				}
+			})
+		}
+}
+
+func (s *Server) stopQueue() {
+	if s.deps.runner == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
+	defer cancel()
+
+	if err := s.deps.runner.Stop(ctx); err != nil {
+		s.logger.Error("Не удалось остановить очередь заданий", zap.Error(err))
+	}
 }

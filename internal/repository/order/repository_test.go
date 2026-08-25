@@ -198,6 +198,126 @@ func TestOrderRowDeclaresColumnsOfOrdersTable(t *testing.T) {
 	assert.Contains(t, statement.Schema.FieldsByDBName, "uploaded_at")
 }
 
+// applyResultUpdate подставляет ответ RETURNING вместо настоящей записи.
+func applyResultUpdate(
+	t *testing.T,
+	gormDB *gorm.DB,
+	name string,
+	rows int64,
+	returned domain.Status,
+	observe func(*gorm.DB),
+) {
+	t.Helper()
+
+	require.NoError(t, gormDB.Callback().Update().After("gorm:update").Register(
+		name,
+		func(tx *gorm.DB) {
+			if observe != nil {
+				observe(tx)
+			}
+			tx.RowsAffected = rows
+			if row, ok := tx.Statement.Model.(*orderRow); ok {
+				row.Status = returned
+			}
+		},
+	))
+}
+
+func TestRepository_ApplyResultWritesIntermediateOrderInOneStatement(t *testing.T) {
+	gormDB := newDryRunDB(t)
+	var query string
+	var variables []any
+	applyResultUpdate(t, gormDB, "test:observe-apply-result", 1, domain.StatusProcessing, func(tx *gorm.DB) {
+		query = tx.Statement.SQL.String()
+		variables = slices.Clone(tx.Statement.Vars)
+	})
+	accrued := money.Points(50050)
+
+	finished, err := New(gormDB).ApplyResult(
+		context.Background(),
+		"12345678903",
+		domain.StatusProcessing,
+		&accrued,
+	)
+
+	require.NoError(t, err)
+	assert.False(t, finished)
+	assert.Contains(t, query, `UPDATE "orders" SET`)
+	assert.Contains(t, query, `WHERE number = $7`)
+	assert.Contains(t, query, `RETURNING "status"`)
+	assert.NotContains(t, query, `SELECT`)
+	assert.Equal(t, []any{
+		domain.StatusProcessed,
+		domain.StatusInvalid,
+		&accrued,
+		domain.StatusProcessed,
+		domain.StatusInvalid,
+		domain.StatusProcessing,
+		"12345678903",
+	}, variables)
+}
+
+func TestRepository_ApplyResultReportsFinishedOrder(t *testing.T) {
+	for _, status := range domain.FinalStatuses() {
+		t.Run(string(status), func(t *testing.T) {
+			gormDB := newDryRunDB(t)
+			applyResultUpdate(t, gormDB, "test:observe-final-apply-result", 1, status, nil)
+
+			finished, err := New(gormDB).ApplyResult(
+				context.Background(),
+				"12345678903",
+				status,
+				nil,
+			)
+
+			require.NoError(t, err)
+			assert.True(t, finished)
+		})
+	}
+}
+
+func TestRepository_ApplyResultKeepsOrderClosedByAnotherAttempt(t *testing.T) {
+	gormDB := newDryRunDB(t)
+	applyResultUpdate(t, gormDB, "test:apply-result-hits-closed-order", 1, domain.StatusInvalid, nil)
+
+	finished, err := New(gormDB).ApplyResult(
+		context.Background(),
+		"12345678903",
+		domain.StatusProcessing,
+		nil,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, finished)
+}
+
+func TestRepository_ApplyResultReportsVanishedOrder(t *testing.T) {
+	gormDB := newDryRunDB(t)
+	applyResultUpdate(t, gormDB, "test:apply-result-misses-order", 0, "", nil)
+
+	finished, err := New(gormDB).ApplyResult(
+		context.Background(),
+		"12345678903",
+		domain.StatusProcessing,
+		nil,
+	)
+
+	require.ErrorIs(t, err, domain.ErrNotFound)
+	assert.False(t, finished)
+}
+
+func TestRepository_ApplyResultWithoutDatabaseIsControlled(t *testing.T) {
+	finished, err := New(nil).ApplyResult(
+		context.Background(),
+		"12345678903",
+		domain.StatusProcessed,
+		nil,
+	)
+
+	require.ErrorIs(t, err, database.ErrUnavailable)
+	assert.False(t, finished)
+}
+
 type repositoryContextKey struct{}
 
 func newDryRunDB(t *testing.T) *gorm.DB {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"go.uber.org/zap/exp/zapslog"
 	"gorm.io/gorm"
 
+	"github.com/shigabutdinoff/gophermart/internal/accrual"
 	"github.com/shigabutdinoff/gophermart/internal/auth"
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
@@ -44,6 +46,7 @@ type deps struct {
 	auth        authentication.Deps
 	orders      ordersroute.Deps
 	tokenParser authorization.TokenParser
+	runner      *riverRunner
 }
 
 // New создаёт сервер с переданной конфигурацией.
@@ -73,7 +76,13 @@ func newServer(
 		return nil, err
 	}
 	cfg.JWTSecret = ""
-	built, err := buildDeps(logger, gormDB, sqlDB, tokens)
+	built, err := buildDeps(depsOptions{
+		logger: logger,
+		cfg:    cfg,
+		gormDB: gormDB,
+		sqlDB:  sqlDB,
+		tokens: tokens,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -89,24 +98,41 @@ func newServer(
 	return server, nil
 }
 
+// depsOptions собирает всё, из чего строятся зависимости сервера.
+// Пустой buildQueue означает боевую сборку очереди.
+type depsOptions struct {
+	logger     *zap.Logger
+	cfg        config.Config
+	gormDB     *gorm.DB
+	sqlDB      *sql.DB
+	tokens     *auth.JWTManager
+	buildQueue queueClientBuilder
+}
+
+type queueClientBuilder func(queueOptions) (queueParts, error)
+
 // buildDeps собирает зависимости маршрутов поверх хранилищ и менеджера токенов.
-func buildDeps(
-	logger *zap.Logger,
-	gormDB *gorm.DB,
-	sqlDB *sql.DB,
-	tokens *auth.JWTManager,
-) (deps, error) {
-	authDeps, err := buildAuthDeps(logger, gormDB, tokens)
+func buildDeps(options depsOptions) (deps, error) {
+	authDeps, err := buildAuthDeps(options.logger, options.gormDB, options.tokens)
 	if err != nil {
 		return deps{}, err
 	}
-	storedOrders := orderrepository.New(gormDB)
-	client, err := newQueueClient(logger, sqlDB)
+	storedOrders := orderrepository.New(options.gormDB)
+	buildQueue := options.buildQueue
+	if buildQueue == nil {
+		buildQueue = newQueueClient
+	}
+	queue, err := buildQueue(queueOptions{
+		logger:       options.logger,
+		cfg:          options.cfg,
+		storedOrders: storedOrders,
+		sqlDB:        options.sqlDB,
+	})
 	if err != nil {
 		return deps{}, err
 	}
-	if client != nil {
-		dispatcher := jobs.NewDispatcher(client)
+	if queue.client != nil {
+		dispatcher := jobs.NewDispatcher(queue.client)
 		if err := storedOrders.AttachPusher(dispatcher); err != nil {
 			return deps{}, fmt.Errorf("attach order job pusher: %w", err)
 		}
@@ -115,26 +141,98 @@ func buildDeps(
 	return deps{
 		auth:        authDeps,
 		orders:      buildOrderDeps(storedOrders),
-		tokenParser: tokens.ParseRequest,
+		tokenParser: options.tokens.ParseRequest,
+		runner:      queue.runner,
 	}, nil
+}
+
+// queueParts делит очередь на постановку заданий и их выполнение.
+// Пустой runner означает очередь только для постановки заданий.
+type queueParts struct {
+	client *river.Client[*sql.Tx]
+	runner *riverRunner
+}
+
+// queueOptions собирает очередь заданий вокруг хранилища заказов.
+type queueOptions struct {
+	logger       *zap.Logger
+	cfg          config.Config
+	storedOrders order.ResultWriter
+	sqlDB        *sql.DB
 }
 
 // newQueueClient поднимает очередь заданий поверх того же пула, что и gorm:
 // иначе задание не попало бы в транзакцию загрузки заказа.
 // Без базы очереди нет, но это не отказ: сервер поднимается и ждёт её.
-func newQueueClient(logger *zap.Logger, sqlDB *sql.DB) (*river.Client[*sql.Tx], error) {
-	if sqlDB == nil {
-		return nil, nil
+func newQueueClient(options queueOptions) (queueParts, error) {
+	if options.sqlDB == nil {
+		return queueParts{}, nil
 	}
 
-	client, err := river.NewClient(riverdatabasesql.New(sqlDB), &river.Config{
-		Logger: slog.New(zapslog.NewHandler(logger.Core())),
-	})
+	queueConfig := &river.Config{Logger: queueLogger(options.logger)}
+	workers := buildWorkers(options.logger, options.cfg, options.storedOrders)
+	if workers != nil {
+		queueConfig.Workers = workers
+		queueConfig.Queues = map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 4},
+		}
+		queueConfig.FetchPollInterval = jobs.DefaultPollInterval
+	}
+
+	client, err := river.NewClient(riverdatabasesql.New(options.sqlDB), queueConfig)
 	if err != nil {
-		return nil, fmt.Errorf("start job queue: %w", err)
+		return queueParts{}, fmt.Errorf("start job queue: %w", err)
+	}
+	if workers == nil {
+		return queueParts{client: client}, nil
 	}
 
-	return client, nil
+	return queueParts{client: client, runner: newRiverRunner(client)}, nil
+}
+
+const pollModeNotice = "Driver does not support listener; entering poll only mode"
+
+type noticeFreeHandler struct {
+	slog.Handler
+}
+
+func (h noticeFreeHandler) Handle(ctx context.Context, record slog.Record) error {
+	if record.Level == slog.LevelInfo && record.Message == pollModeNotice {
+		return nil
+	}
+
+	return h.Handler.Handle(ctx, record)
+}
+
+func (h noticeFreeHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return noticeFreeHandler{Handler: h.Handler.WithAttrs(attrs)}
+}
+
+func (h noticeFreeHandler) WithGroup(name string) slog.Handler {
+	return noticeFreeHandler{Handler: h.Handler.WithGroup(name)}
+}
+
+func queueLogger(logger *zap.Logger) *slog.Logger {
+	return slog.New(noticeFreeHandler{Handler: zapslog.NewHandler(logger.Core())})
+}
+
+// buildWorkers оставляет сервис без опроса расчёта, если его адрес непригоден.
+func buildWorkers(
+	logger *zap.Logger,
+	cfg config.Config,
+	storedOrders order.ResultWriter,
+) *river.Workers {
+	client, err := accrual.New(cfg.AccrualAddress)
+	if err != nil {
+		logger.Warn("Опрос системы расчёта отключён", zap.Error(err))
+
+		return nil
+	}
+
+	workers := river.NewWorkers()
+	river.AddWorker(workers, jobs.NewCheckAccrual(logger, client, storedOrders, jobs.CheckAccrualOptions{}))
+
+	return workers
 }
 
 // buildAuthDeps собирает регистрацию и вход поверх хранилища пользователей.

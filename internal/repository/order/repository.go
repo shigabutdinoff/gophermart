@@ -137,6 +137,42 @@ func createOrFindOwner(tx *gorm.DB, number string, userID int64) (domain.CreateO
 	return domain.OwnedByAnother, nil
 }
 
+// ApplyResult пишет исход расчёта и отвечает, закончен ли заказ.
+// Завершённый заказ переписывать нельзя, и решает это сама запись: условие
+// внутри неё заменяет блокировку, а RETURNING отличает заказ, закрытый до нас,
+// от пропавшей строки, на которую ушло бы ещё одно задание.
+func (r *Repository) ApplyResult(
+	ctx context.Context,
+	number string,
+	status domain.Status,
+	accrual *money.Points,
+) (bool, error) {
+	db, err := r.session.WithContext(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	final := domain.FinalStatuses()
+	var updated orderRow
+	update := db.Table(ordersTable).
+		Model(&updated).
+		Clauses(clause.Returning{Columns: []clause.Column{{Name: "status"}}}).
+		Where("number = ?", number).
+		Updates(map[string]any{
+			"status":  gorm.Expr("CASE WHEN status IN ? THEN status ELSE ? END", final, status),
+			"accrual": gorm.Expr("CASE WHEN status IN ? THEN accrual ELSE ? END", final, accrual),
+		})
+	if update.Error != nil {
+		return false, fmt.Errorf("apply order result: %w", update.Error)
+	}
+	// пропавшую строку не вернёт ни одна следующая попытка записи
+	if update.RowsAffected == 0 {
+		return false, fmt.Errorf("apply order result: %w", domain.ErrNotFound)
+	}
+
+	return updated.Status.IsFinal(), nil
+}
+
 func (r *Repository) ListByUser(ctx context.Context, userID int64) ([]domain.Order, error) {
 	db, err := r.session.WithContext(ctx)
 	if err != nil {
