@@ -29,12 +29,18 @@ type Server struct {
 	ln              net.Listener
 	srv             *http.Server
 	sqlDB           *sql.DB
-	authDeps        authentication.Deps
-	orderDeps       ordersroute.Deps
-	tokenParser     authorization.TokenParser
+	deps            deps
 	config.Config
 }
 
+// deps собирает всё, что сервер отдаёт маршрутам и фоновым задачам.
+type deps struct {
+	auth        authentication.Deps
+	orders      ordersroute.Deps
+	tokenParser authorization.TokenParser
+}
+
+// New создаёт сервер с переданной конфигурацией.
 func New(logger *zap.Logger, cfg config.Config) (*Server, error) {
 	gormDB, sqlDB := openDatabase(logger, cfg.DatabaseURI)
 	server, err := newServer(logger, cfg, time.Now, gormDB, sqlDB)
@@ -61,8 +67,7 @@ func newServer(
 		return nil, err
 	}
 	cfg.JWTSecret = ""
-
-	authDeps, err := buildAuthDeps(logger, gormDB, tokens)
+	built, err := buildDeps(logger, gormDB, tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -71,15 +76,32 @@ func newServer(
 		logger:          logger,
 		shutdownTimeout: DefaultShutdownTimeout,
 		sqlDB:           sqlDB,
-		authDeps:        authDeps,
-		orderDeps:       buildOrderDeps(gormDB),
-		tokenParser:     tokens.ParseRequest,
+		deps:            built,
 		Config:          cfg,
 	}
 	server.setupRoutes()
 	return server, nil
 }
 
+// buildDeps собирает зависимости маршрутов поверх хранилищ и менеджера токенов.
+func buildDeps(
+	logger *zap.Logger,
+	gormDB *gorm.DB,
+	tokens *auth.JWTManager,
+) (deps, error) {
+	authDeps, err := buildAuthDeps(logger, gormDB, tokens)
+	if err != nil {
+		return deps{}, err
+	}
+
+	return deps{
+		auth:        authDeps,
+		orders:      buildOrderDeps(gormDB),
+		tokenParser: tokens.ParseRequest,
+	}, nil
+}
+
+// buildAuthDeps собирает регистрацию и вход поверх хранилища пользователей.
 func buildAuthDeps(
 	logger *zap.Logger,
 	gormDB *gorm.DB,

@@ -65,9 +65,9 @@ func TestNew_BuildsAuthDependenciesBeforeRouter(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, server.router)
-	assert.NotNil(t, server.authDeps.Register)
-	assert.NotNil(t, server.authDeps.Login)
-	assert.NotNil(t, server.tokenParser)
+	assert.NotNil(t, server.deps.auth.Register)
+	assert.NotNil(t, server.deps.auth.Login)
+	assert.NotNil(t, server.deps.tokenParser)
 	assert.Empty(t, server.JWTSecret)
 }
 

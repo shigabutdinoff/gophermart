@@ -45,23 +45,27 @@ func TestIndependentSecretsAreIsolatedOnProtectedOrderRoute(t *testing.T) {
 
 	firstCalls := 0
 	first := &Server{
-		logger:      zap.NewNop(),
-		tokenParser: firstTokens.ParseRequest,
-		orderDeps: ordersroute.Deps{List: func(context.Context, int64) ([]order.Order, error) {
-			firstCalls++
-			return nil, nil
-		}},
+		logger: zap.NewNop(),
+		deps: deps{
+			tokenParser: firstTokens.ParseRequest,
+			orders: ordersroute.Deps{List: func(context.Context, int64) ([]order.Order, error) {
+				firstCalls++
+				return nil, nil
+			}},
+		},
 		Config: config.Default(),
 	}
 	first.setupRoutes()
 	secondCalls := 0
 	second := &Server{
-		logger:      zap.NewNop(),
-		tokenParser: secondTokens.ParseRequest,
-		orderDeps: ordersroute.Deps{List: func(context.Context, int64) ([]order.Order, error) {
-			secondCalls++
-			return nil, nil
-		}},
+		logger: zap.NewNop(),
+		deps: deps{
+			tokenParser: secondTokens.ParseRequest,
+			orders: ordersroute.Deps{List: func(context.Context, int64) ([]order.Order, error) {
+				secondCalls++
+				return nil, nil
+			}},
+		},
 		Config: config.Default(),
 	}
 	second.setupRoutes()
