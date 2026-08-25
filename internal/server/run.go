@@ -109,9 +109,7 @@ func (s *Server) queueActor(ctx context.Context, readyChannels ...<-chan struct{
 			case <-interrupted:
 				return nil
 			}
-			if err := s.deps.runner.Start(startCtx); err != nil {
-				s.logger.Error("Не удалось запустить очередь заданий", zap.Error(err))
-			}
+			s.keepQueueRunning(startCtx, interrupted)
 			<-interrupted
 
 			return nil
@@ -121,6 +119,52 @@ func (s *Server) queueActor(ctx context.Context, readyChannels ...<-chan struct{
 				cancelStart()
 			})
 		}
+}
+
+func (s *Server) keepQueueRunning(ctx context.Context, interrupted <-chan struct{}) {
+	for {
+		if err := s.startQueue(ctx); err != nil {
+			return
+		}
+		select {
+		case <-s.deps.runner.Stopped():
+		case <-interrupted:
+			return
+		}
+		select {
+		case <-interrupted:
+			return
+		default:
+		}
+		s.logger.Error("Очередь заданий неожиданно остановилась")
+		if !s.waitBeforeRestart(interrupted) {
+			return
+		}
+	}
+}
+
+func (s *Server) waitBeforeRestart(interrupted <-chan struct{}) bool {
+	timer := time.NewTimer(s.retryDelay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return true
+	case <-interrupted:
+		return false
+	}
+}
+
+func (s *Server) startQueue(ctx context.Context) error {
+	return retry.Do(func() error {
+		err := s.deps.runner.Start(ctx)
+		if err != nil && context.Cause(ctx) != nil {
+			return retry.Unrecoverable(context.Cause(ctx))
+		}
+		return err
+	}, s.retryForeverOptions(ctx, func(attempt uint, err error) {
+		s.logger.Warn("Повторная попытка запустить очередь заданий", zap.Uint("attempt", attempt+1), zap.Error(err))
+	})...)
 }
 
 func (s *Server) stopQueue(ctx context.Context) {
