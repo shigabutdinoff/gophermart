@@ -32,6 +32,8 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// пишется и читается в горутине, вызвавшей Run, гонки здесь нет
 	var shutdownErr error
+	budget := newShutdownBudget(s.shutdownTimeout)
+	defer budget.release()
 
 	var group run.Group
 	group.Add(func() error {
@@ -41,7 +43,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return nil
 	}, func(error) {
 		if ctx.Err() != nil {
-			shutdownErr = s.shutdown()
+			shutdownErr = s.shutdown(budget.httpContext())
 			return
 		}
 		// обслуживание прервалось само, соединения закрываются принудительно
@@ -59,9 +61,14 @@ func (s *Server) Run(ctx context.Context) error {
 		err = nil
 	}
 
-	s.stopQueue()
+	if shutdownErr != nil {
+		s.logger.Error("Не удалось остановить обслуживание", zap.Error(shutdownErr))
+	}
+	s.stopQueue(budget.context())
 
-	return errors.Join(err, shutdownErr)
+	// неудачи остановки остаются в логе: процесс уже сворачивается, и код
+	// выхода не должен отличать штатный сигнал от затянувшегося дренажа
+	return err
 }
 
 // queueActor запускает очередь один раз и держит её в группе до остановки.
@@ -86,13 +93,10 @@ func (s *Server) queueActor(ctx context.Context) (func() error, func(error)) {
 		}
 }
 
-func (s *Server) stopQueue() {
+func (s *Server) stopQueue(ctx context.Context) {
 	if s.deps.runner == nil {
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
-	defer cancel()
 
 	if err := s.deps.runner.Stop(ctx); err != nil {
 		s.logger.Error("Не удалось остановить очередь заданий", zap.Error(err))

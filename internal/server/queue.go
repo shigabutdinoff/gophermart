@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
@@ -34,11 +35,12 @@ type queueThrottle interface {
 
 // queueOptions собирает очередь заданий вокруг хранилища заказов.
 type queueOptions struct {
-	logger         *zap.Logger
-	queue          config.QueueConfig
-	accrualAddress string
-	storedOrders   order.ResultWriter
-	sqlDB          *sql.DB
+	logger          *zap.Logger
+	queue           config.QueueConfig
+	accrualAddress  string
+	storedOrders    order.ResultWriter
+	sqlDB           *sql.DB
+	shutdownTimeout time.Duration
 }
 
 // newQueueClient поднимает очередь заданий поверх того же пула, что и gorm:
@@ -49,7 +51,7 @@ func newQueueClient(options queueOptions) (queueParts, error) {
 		return queueParts{}, nil
 	}
 	queue := options.queue
-	queueConfig := newQueueConfig(options.logger, queue)
+	queueConfig := newQueueConfig(options.logger, queue, options.shutdownTimeout)
 	accrualClient, accrualErr := accrual.New(options.accrualAddress)
 	var throttle queueThrottle
 	if accrualErr != nil {
@@ -88,11 +90,14 @@ func newQueueClient(options queueOptions) (queueParts, error) {
 func newQueueConfig(
 	logger *zap.Logger,
 	queue config.QueueConfig,
+	shutdownTimeout time.Duration,
 ) *river.Config {
 	return &river.Config{
 		Logger:            queueLogger(logger),
 		MaxAttempts:       queue.MaxAttempts,
 		FetchPollInterval: queue.FetchPollInterval,
+		// внутренняя эскалация River начинается до единого дедлайна
+		SoftStopTimeout: shutdownTimeout / 4,
 	}
 }
 

@@ -139,9 +139,8 @@ func TestServer_ForcesShutdownAfterTimeout(t *testing.T) {
 	})
 
 	core, logs := observer.New(zap.InfoLevel)
-	s := mustNew(t, zap.New(core), config.Default())
+	s := mustNew(t, zap.New(core), config.Default(), WithShutdownTimeout(100*time.Millisecond))
 	s.runAddress = "127.0.0.1:0"
-	s.shutdownTimeout = 100 * time.Millisecond
 	s.router = r
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -157,10 +156,12 @@ func TestServer_ForcesShutdownAfterTimeout(t *testing.T) {
 	<-started
 	cancel()
 
-	require.Error(t, waitDone(t, done))
+	// затянувшийся дренаж остаётся в логе: код выхода штатной остановки не меняет
+	require.NoError(t, waitDone(t, done))
 	close(release)
 
 	assert.Equal(t, 1, logs.FilterMessage("Превышен таймаут остановки, принудительное закрытие").Len())
+	assert.Equal(t, 1, logs.FilterMessage("Не удалось остановить обслуживание").Len())
 }
 
 func TestServer_ServeErrorReturnedNotLogged(t *testing.T) {

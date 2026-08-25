@@ -35,6 +35,13 @@ const (
 	DefaultIdleTimeout       = 60 * time.Second
 )
 
+type Option func(*serverOptions)
+type serverOptions struct{ shutdownTimeout time.Duration }
+
+func WithShutdownTimeout(timeout time.Duration) Option {
+	return func(options *serverOptions) { options.shutdownTimeout = timeout }
+}
+
 type Server struct {
 	router           *chi.Mux
 	logger           *zap.Logger
@@ -57,9 +64,9 @@ type deps struct {
 }
 
 // New создаёт сервер с переданной конфигурацией.
-func New(logger *zap.Logger, cfg config.Config) (*Server, error) {
+func New(logger *zap.Logger, cfg config.Config, options ...Option) (*Server, error) {
 	session, sqlDB := openDatabase(logger, cfg.DatabaseURI)
-	server, err := newServer(logger, cfg, session, sqlDB)
+	server, err := newServer(logger, cfg, session, sqlDB, options...)
 	if err != nil {
 		closeDatabaseHandle(logger, sqlDB)
 	}
@@ -72,6 +79,7 @@ func newServer(
 	cfg config.Config,
 	session database.Session,
 	sqlDB *sql.DB,
+	options ...Option,
 ) (*Server, error) {
 	secret, err := auth.ResolveSecret(cfg.JWTSecret)
 	if err != nil {
@@ -81,13 +89,18 @@ func newServer(
 	if err != nil {
 		return nil, err
 	}
+	settings := serverOptions{shutdownTimeout: DefaultShutdownTimeout}
+	for _, apply := range options {
+		apply(&settings)
+	}
 	built, err := buildDeps(depsOptions{
-		logger:         logger,
-		queue:          cfg.Queue,
-		accrualAddress: cfg.AccrualAddress,
-		session:        session,
-		sqlDB:          sqlDB,
-		tokens:         tokens,
+		logger:          logger,
+		queue:           cfg.Queue,
+		accrualAddress:  cfg.AccrualAddress,
+		session:         session,
+		sqlDB:           sqlDB,
+		tokens:          tokens,
+		shutdownTimeout: settings.shutdownTimeout,
 	})
 	if err != nil {
 		return nil, err
@@ -97,7 +110,7 @@ func newServer(
 		logger:           logger,
 		runAddress:       cfg.RunAddress,
 		requestBodyLimit: cfg.RequestBodyLimit,
-		shutdownTimeout:  DefaultShutdownTimeout,
+		shutdownTimeout:  settings.shutdownTimeout,
 		sqlDB:            sqlDB,
 		deps:             built,
 	}
@@ -108,13 +121,14 @@ func newServer(
 // depsOptions собирает всё, из чего строятся зависимости сервера.
 // Пустой buildQueue означает боевую сборку очереди.
 type depsOptions struct {
-	logger         *zap.Logger
-	queue          config.QueueConfig
-	accrualAddress string
-	session        database.Session
-	sqlDB          *sql.DB
-	tokens         *auth.JWTManager
-	buildQueue     queueClientBuilder
+	logger          *zap.Logger
+	queue           config.QueueConfig
+	accrualAddress  string
+	session         database.Session
+	sqlDB           *sql.DB
+	tokens          *auth.JWTManager
+	buildQueue      queueClientBuilder
+	shutdownTimeout time.Duration
 }
 
 // buildDeps собирает зависимости маршрутов поверх хранилищ и менеджера токенов.
@@ -130,11 +144,12 @@ func buildDeps(options depsOptions) (deps, error) {
 		buildQueue = newQueueClient
 	}
 	queue, err := buildQueue(queueOptions{
-		logger:         options.logger,
-		queue:          options.queue,
-		accrualAddress: options.accrualAddress,
-		storedOrders:   storedOrders,
-		sqlDB:          options.sqlDB,
+		logger:          options.logger,
+		queue:           options.queue,
+		accrualAddress:  options.accrualAddress,
+		storedOrders:    storedOrders,
+		sqlDB:           options.sqlDB,
+		shutdownTimeout: options.shutdownTimeout,
 	})
 	if err != nil {
 		return deps{}, err

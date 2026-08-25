@@ -21,7 +21,7 @@ func newTestConfig() config.Config {
 	return cfg
 }
 
-func mustNew(t *testing.T, logger *zap.Logger, cfg config.Config) *Server {
+func mustNew(t *testing.T, logger *zap.Logger, cfg config.Config, options ...Option) *Server {
 	t.Helper()
 	if cfg.JWTSecret == "" {
 		cfg.JWTSecret = testJWTSecret
@@ -29,7 +29,7 @@ func mustNew(t *testing.T, logger *zap.Logger, cfg config.Config) *Server {
 	if cfg.AccrualAddress == "" {
 		cfg.AccrualAddress = testAccrualAddress
 	}
-	server, err := New(logger, cfg)
+	server, err := New(logger, cfg, options...)
 	require.NoError(t, err)
 	return server
 }
