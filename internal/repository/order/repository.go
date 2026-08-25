@@ -2,6 +2,7 @@ package order
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 )
 
 const ordersTable = "orders"
+
+// errPusherMissing отвечает за репозиторий, собранный без очереди заданий.
+var errPusherMissing = errors.New("order job pusher is not configured")
 
 // orderRow задаёт колонки явно, домен не зависит от соглашений gorm об именах.
 type orderRow struct {
@@ -35,14 +39,34 @@ func (r orderRow) order() domain.Order {
 	}
 }
 
+// Pusher ставит задание на опрос расчёта в очередь.
+type Pusher interface {
+	Push(ctx context.Context, tx *gorm.DB, number string) error
+}
+
 // Repository хранит заказы, номер ожидается уже нормализованным.
 type Repository struct {
 	session database.Session
+	jobs    Pusher
 }
 
 // New принимает nil вместо БД, тогда репозиторий отвечает отказом.
 func New(db *gorm.DB) *Repository {
 	return &Repository{session: database.NewSession(db)}
+}
+
+// AttachPusher один раз подключает очередь после сборки её клиента.
+func (r *Repository) AttachPusher(jobs Pusher) error {
+	if jobs == nil {
+		return errors.New("cannot attach nil order job pusher")
+	}
+	if r.jobs != nil {
+		return errors.New("order job pusher is already configured")
+	}
+
+	r.jobs = jobs
+
+	return nil
 }
 
 // CreateOrFindOwner классифицирует создание или конфликт номера.
@@ -55,13 +79,22 @@ func (r *Repository) CreateOrFindOwner(
 	if err != nil {
 		return 0, err
 	}
+	if r.jobs == nil {
+		return 0, errPusherMissing
+	}
 
 	var outcome domain.CreateOutcome
 	err = db.Transaction(func(tx *gorm.DB) error {
 		var err error
 		outcome, err = createOrFindOwner(tx, number, userID)
+		if err != nil || outcome != domain.Created {
+			return err
+		}
+		if err := r.jobs.Push(ctx, tx, number); err != nil {
+			return fmt.Errorf("dispatch accrual check: %w", err)
+		}
 
-		return err
+		return nil
 	})
 	if err != nil {
 		return 0, err

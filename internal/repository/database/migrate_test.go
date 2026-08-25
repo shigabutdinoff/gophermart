@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -14,16 +15,18 @@ import (
 // migrationsDir указывает корень встроенной файловой системы миграций
 const migrationsDir = "."
 
-// Двойник без ожиданий отвергает любой запрос, так же ведёт себя мёртвая БД.
-func TestMigrate_UnreachableDatabaseReturnsError(t *testing.T) {
+func TestMigrate_StartsDomainMigrationsBeforeQueue(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	mock.ExpectClose()
+	domainErr := errors.New("domain migration")
+	mock.ExpectQuery(`SELECT EXISTS .*goose_db_version`).WillReturnError(domainErr)
 	t.Cleanup(func() { _ = db.Close() })
 
 	err = Migrate(context.Background(), db)
 
-	require.Error(t, err)
+	require.ErrorIs(t, err, domainErr)
+	assert.ErrorContains(t, err, "apply migrations")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // Состав встроенной ФС проверяет пакет migrations, здесь важен сам каталог.
