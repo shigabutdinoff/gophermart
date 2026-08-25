@@ -103,6 +103,7 @@ func (r *Repository) CreateOrFindOwner(
 }
 
 // createOrFindOwner молчит о конфликте номера, прочие остаются ошибкой.
+// Задание на опрос расчёта ставится той же транзакцией: заказа без задания нет.
 func (r *Repository) createOrFindOwner(
 	ctx context.Context,
 	tx database.Tx,
@@ -110,8 +111,30 @@ func (r *Repository) createOrFindOwner(
 	userID int64,
 ) (domain.CreateOutcome, error) {
 	digest := sha256.Sum256([]byte(number))
+	created, err := insertOrder(tx, number, digest[:], userID)
+	if err != nil {
+		return 0, err
+	}
+	if !created {
+		return findOwner(tx, number, digest[:], userID)
+	}
+	sqlTx, err := tx.SQL()
+	if err != nil {
+		return 0, err
+	}
+	if err := r.jobs.Push(ctx, sqlTx, number); err != nil {
+		return 0, fmt.Errorf("dispatch accrual check: %w", err)
+	}
+
+	return domain.Created, nil
+}
+
+func insertOrder(tx database.Tx, number string, digest []byte, userID int64) (bool, error) {
 	row := orderRow{
-		Number: number, NumberHash: digest[:], UserID: userID, Status: domain.StatusNew,
+		Number:     number,
+		NumberHash: digest,
+		UserID:     userID,
+		Status:     domain.StatusNew,
 	}
 	insert := tx.DB().Table(ordersTable).
 		Clauses(clause.OnConflict{
@@ -120,24 +143,23 @@ func (r *Repository) createOrFindOwner(
 		}).
 		Create(&row)
 	if insert.Error != nil {
-		return 0, insert.Error
-	}
-	if insert.RowsAffected == 1 {
-		sqlTx, err := tx.SQL()
-		if err != nil {
-			return 0, err
-		}
-		if err := r.jobs.Push(ctx, sqlTx, number); err != nil {
-			return 0, fmt.Errorf("dispatch accrual check: %w", err)
-		}
-
-		return domain.Created, nil
+		return false, insert.Error
 	}
 
+	return insert.RowsAffected == 1, nil
+}
+
+// findOwner отличает повтор того же владельца от заказа чужого пользователя.
+func findOwner(
+	tx database.Tx,
+	number string,
+	digest []byte,
+	userID int64,
+) (domain.CreateOutcome, error) {
 	var stored orderRow
 	if err := tx.DB().Table(ordersTable).
 		Select("number", "user_id").
-		Where("number_hash = ?", digest[:]).
+		Where("number_hash = ?", digest).
 		Take(&stored).Error; err != nil {
 		// строку только что перехватил конкурент и она уже удалена
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -171,11 +193,14 @@ func (r *Repository) ApplyResult(
 		return false, err
 	}
 
+	// поиск идёт по хешу: индекс есть только у него, номер отсекает коллизию
+	digest := sha256.Sum256([]byte(number))
 	final := domain.FinalStatuses()
 	var updated orderRow
 	update := db.Table(ordersTable).
 		Model(&updated).
 		Clauses(clause.Returning{Columns: []clause.Column{{Name: "status"}}}).
+		Where("number_hash = ?", digest[:]).
 		Where("number = ?", number).
 		Updates(map[string]any{
 			"status":  gorm.Expr("CASE WHEN status IN ? THEN status ELSE ? END", final, status),

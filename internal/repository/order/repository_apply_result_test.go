@@ -2,6 +2,7 @@ package order
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"slices"
 	"testing"
@@ -38,9 +39,10 @@ func TestRepository_ApplyResultWritesIntermediateOrderInOneStatement(t *testing.
 	assert.Contains(t, query, `UPDATE "orders" SET`)
 	assert.Contains(t, query, `"accrual"=CASE WHEN status IN ($1,$2) THEN accrual ELSE $3 END`)
 	assert.Contains(t, query, `"status"=CASE WHEN status IN ($4,$5) THEN status ELSE $6 END`)
-	assert.Contains(t, query, `WHERE number = $7`)
+	assert.Contains(t, query, `WHERE number_hash = $7 AND number = $8`)
 	assert.Contains(t, query, `RETURNING "status"`)
 	assert.NotContains(t, query, `SELECT`, "исход пишется одним запросом")
+	digest := sha256.Sum256([]byte("12345678903"))
 	assert.Equal(
 		t,
 		[]any{
@@ -50,6 +52,7 @@ func TestRepository_ApplyResultWritesIntermediateOrderInOneStatement(t *testing.
 			domain.StatusProcessed,
 			domain.StatusInvalid,
 			domain.StatusProcessing,
+			digest[:],
 			"12345678903",
 		},
 		variables,
