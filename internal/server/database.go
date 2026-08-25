@@ -13,6 +13,7 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
 
+// Границы пула соединений с БД
 const (
 	databaseMaxConns        = 10
 	databaseConnMaxIdleTime = time.Minute
@@ -26,19 +27,7 @@ const (
 	databasePingTimeout = 700 * time.Millisecond
 )
 
-func (s *Server) pinger() healthcheck.Pinger {
-	if s.sqlDB == nil {
-		return unavailableDB{}
-	}
-	return s.sqlDB
-}
-
-type unavailableDB struct{}
-
-func (unavailableDB) PingContext(context.Context) error {
-	return database.ErrUnavailable
-}
-
+// openDatabase открывает ленивое соединение, пара nil означает работу без БД.
 func openDatabase(logger *zap.Logger, dsn string) (database.Session, *sql.DB) {
 	session, err := database.Open(dsn)
 	if err != nil {
@@ -51,6 +40,7 @@ func openDatabase(logger *zap.Logger, dsn string) (database.Session, *sql.DB) {
 		logger.Warn("Не удалось получить пул соединений БД", zap.Error(err))
 		return database.Session{}, nil
 	}
+	// без потолка каждый лишний запрос открывает и выбрасывает соединение
 	sqlDB.SetMaxOpenConns(databaseMaxConns)
 	sqlDB.SetMaxIdleConns(databaseMaxConns)
 	sqlDB.SetConnMaxIdleTime(databaseConnMaxIdleTime)
@@ -58,6 +48,22 @@ func openDatabase(logger *zap.Logger, dsn string) (database.Session, *sql.DB) {
 	return session, sqlDB
 }
 
+// unavailableDB отвечает отказом, пока соединение с БД не открыто.
+type unavailableDB struct{}
+
+func (unavailableDB) PingContext(context.Context) error {
+	return database.ErrUnavailable
+}
+
+// pinger возвращает проверяемое соединение, без БД отказ приходит сам.
+func (s *Server) pinger() healthcheck.Pinger {
+	if s.sqlDB == nil {
+		return unavailableDB{}
+	}
+	return s.sqlDB
+}
+
+// initDatabase дожидается доступности БД и запускает миграции.
 func (s *Server) initDatabase(
 	ctx context.Context,
 	migrate func(context.Context, *sql.DB) error,
@@ -80,7 +86,13 @@ func (s *Server) initDatabase(
 	return nil
 }
 
-func (s *Server) databaseLifecycle(ctx context.Context, migrate func(context.Context, *sql.DB) error) (<-chan struct{}, func() error, func(error)) {
+// databaseLifecycle синхронно готовит БД и при необходимости создаёт actor
+// восстановления. Без открытого пула повторять подключение в этом процессе
+// невозможно.
+func (s *Server) databaseLifecycle(
+	ctx context.Context,
+	migrate func(context.Context, *sql.DB) error,
+) (<-chan struct{}, func() error, func(error)) {
 	ready := make(chan struct{})
 	if err := s.initDatabase(ctx, migrate); err == nil {
 		close(ready)
@@ -89,30 +101,51 @@ func (s *Server) databaseLifecycle(ctx context.Context, migrate func(context.Con
 	if s.sqlDB == nil {
 		return ready, nil, nil
 	}
+
 	actor, interrupt := s.databaseRecoveryActor(ctx, ready, migrate)
 	return ready, actor, interrupt
 }
 
-func (s *Server) databaseRecoveryActor(ctx context.Context, ready chan<- struct{}, migrate func(context.Context, *sql.DB) error) (func() error, func(error)) {
+// databaseRecoveryActor повторяет полный цикл подготовки до готовности БД.
+// После успеха actor остаётся в группе до прерывания и не завершает HTTP.
+func (s *Server) databaseRecoveryActor(
+	ctx context.Context,
+	ready chan<- struct{},
+	migrate func(context.Context, *sql.DB) error,
+) (func() error, func(error)) {
 	if s.sqlDB == nil {
 		return nil, nil
 	}
+
 	recoveryCtx, cancelRecovery := context.WithCancel(ctx)
 	var interruptOnce sync.Once
+
 	return func() error {
-		err := retry.Do(
-			func() error { return s.initDatabase(recoveryCtx, migrate) },
-			s.retryForeverOptions(recoveryCtx, func(attempt uint, err error) {
-				s.logger.Warn("Повторная попытка подготовить БД", zap.Uint("attempt", attempt+1), zap.Error(err))
-			})...,
-		)
-		if err != nil {
+			err := retry.Do(
+				func() error { return s.initDatabase(recoveryCtx, migrate) },
+				s.retryForeverOptions(
+					recoveryCtx,
+					func(attempt uint, err error) {
+						s.logger.Warn(
+							"Повторная попытка подготовить БД",
+							zap.Uint("attempt", attempt+1),
+							zap.Error(err),
+						)
+					},
+				)...,
+			)
+			// повторы кончаются только прерыванием, отказ здесь не ошибка actor
+			if err != nil {
+				return nil
+			}
+
+			close(ready)
+			<-recoveryCtx.Done()
+
 			return nil
+		}, func(error) {
+			interruptOnce.Do(cancelRecovery)
 		}
-		close(ready)
-		<-recoveryCtx.Done()
-		return nil
-	}, func(error) { interruptOnce.Do(cancelRecovery) }
 }
 
 // pingWithRetry повторяет проверку связи с БД в пределах общего бюджета.
@@ -124,7 +157,6 @@ func (s *Server) pingWithRetry(ctx context.Context) error {
 		func() error {
 			attemptCtx, cancelAttempt := context.WithTimeout(budgetCtx, databasePingTimeout)
 			defer cancelAttempt()
-
 			return s.sqlDB.PingContext(attemptCtx)
 		},
 		retry.Context(budgetCtx),

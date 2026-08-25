@@ -179,6 +179,31 @@ func TestInitDatabase_GivesUpAfterConfiguredAttempts(t *testing.T) {
 	}
 }
 
+func TestInitDatabase_StopsRetryingOnCanceledContext(t *testing.T) {
+	s, logs := newObservedServer(t, "postgresql://user:password@db:5432/gophermart")
+	s.retryDelay = time.Hour
+	refused := errors.New("connection refused")
+	handle, mock := newPingMock(t, refused)
+	s.sqlDB = handle
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		require.Eventually(
+			t,
+			func() bool { return mock.ExpectationsWereMet() == nil },
+			time.Second,
+			time.Millisecond,
+		)
+		cancel()
+	}()
+
+	start := time.Now()
+	s.initDatabase(ctx, func(context.Context, *sql.DB) error { return nil })
+
+	assert.Less(t, time.Since(start), 5*time.Second, "ожидание обязано прерваться отменой")
+	assert.Equal(t, 1, logs.FilterMessage("Повторная попытка подключения к БД").Len())
+}
+
 func TestOpenDatabase_AppliesPoolLimits(t *testing.T) {
 	s, _ := newObservedServer(t, unavailableDatabaseDSN)
 	require.NotNil(t, s.sqlDB)
