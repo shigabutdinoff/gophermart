@@ -12,6 +12,7 @@ import (
 
 const testJWTSecret = "0123456789abcdef0123456789abcdef"
 
+// testAccrualAddress убирает из журнала предупреждение об отключённом опросе
 const testAccrualAddress = "localhost:8081"
 
 func newTestConfig() config.Config {

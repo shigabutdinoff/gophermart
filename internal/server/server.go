@@ -33,6 +33,7 @@ const (
 	DefaultReadTimeout       = 30 * time.Second
 	DefaultWriteTimeout      = 30 * time.Second
 	DefaultIdleTimeout       = 60 * time.Second
+	DefaultRetryDelay        = time.Second
 )
 
 type Option func(*serverOptions)
@@ -43,15 +44,18 @@ func WithShutdownTimeout(timeout time.Duration) Option {
 }
 
 type Server struct {
-	router           *chi.Mux
-	logger           *zap.Logger
-	runAddress       string
-	requestBodyLimit int64
-	shutdownTimeout  time.Duration
-	ln               net.Listener
-	srv              *http.Server
-	sqlDB            *sql.DB
-	deps             deps
+	router             *chi.Mux
+	logger             *zap.Logger
+	runAddress         string
+	requestBodyLimit   int64
+	shutdownTimeout    time.Duration
+	retryDelay         time.Duration
+	databaseRetryTimer retryTimer
+	migrateDatabase    func(context.Context, *sql.DB) error
+	ln                 net.Listener
+	srv                *http.Server
+	sqlDB              *sql.DB
+	deps               deps
 }
 
 // deps собирает всё, что сервер отдаёт маршрутам и фоновым задачам.
@@ -111,6 +115,8 @@ func newServer(
 		runAddress:       cfg.RunAddress,
 		requestBodyLimit: cfg.RequestBodyLimit,
 		shutdownTimeout:  settings.shutdownTimeout,
+		retryDelay:       DefaultRetryDelay,
+		migrateDatabase:  database.Migrate,
 		sqlDB:            sqlDB,
 		deps:             built,
 	}

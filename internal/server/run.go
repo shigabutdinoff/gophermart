@@ -5,12 +5,32 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 
+	"github.com/avast/retry-go/v4"
 	"github.com/oklog/run"
 	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
+
+const retryMaxDelay = 30 * time.Second
+
+type retryTimer interface {
+	After(time.Duration) <-chan time.Time
+}
+
+func (s *Server) retryForeverOptions(ctx context.Context, timer retryTimer, onRetry retry.OnRetryFunc) []retry.Option {
+	options := []retry.Option{
+		retry.Context(ctx), retry.Attempts(0), retry.Delay(s.retryDelay),
+		retry.DelayType(retry.BackOffDelay), retry.MaxDelay(retryMaxDelay),
+		retry.LastErrorOnly(true), retry.OnRetry(onRetry),
+	}
+	if timer != nil {
+		options = append(options, retry.WithTimer(timer))
+	}
+	return options
+}
 
 // Run работает до отмены контекста, затем останавливается за shutdownTimeout.
 func (s *Server) Run(ctx context.Context) error {

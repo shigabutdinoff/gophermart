@@ -7,6 +7,7 @@ require (
 	github.com/alexedwards/argon2id v1.0.0
 	github.com/alexflint/go-arg v1.6.1
 	github.com/alexliesenfeld/health v0.8.1
+	github.com/avast/retry-go/v4 v4.7.0
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/danielgtaylor/huma/v2 v2.39.1
 	github.com/go-chi/chi/v5 v5.3.1
