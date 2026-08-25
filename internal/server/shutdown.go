@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// shutdownBudget лениво заводит единый абсолютный срок остановки.
 type shutdownBudget struct {
 	timeout    time.Duration
 	once       sync.Once
@@ -28,8 +29,20 @@ func (b *shutdownBudget) start() {
 	})
 }
 
-func (b *shutdownBudget) context() context.Context     { b.start(); return b.ctx }
-func (b *shutdownBudget) httpContext() context.Context { b.start(); return b.httpCtx }
+// context возвращает единый абсолютный срок всей остановки.
+func (b *shutdownBudget) context() context.Context {
+	b.start()
+
+	return b.ctx
+}
+
+// httpContext отдаёт HTTP первую половину общего срока.
+func (b *shutdownBudget) httpContext() context.Context {
+	b.start()
+
+	return b.httpCtx
+}
+
 func (b *shutdownBudget) release() {
 	if b.httpCancel != nil {
 		b.httpCancel()
@@ -42,6 +55,7 @@ func (b *shutdownBudget) release() {
 // shutdown останавливает сервер, при таймауте закрывает принудительно.
 func (s *Server) shutdown(ctx context.Context) error {
 	s.logger.Info("Начата остановка сервера")
+
 	if err := s.srv.Shutdown(ctx); err != nil {
 		s.logger.Info("Превышен таймаут остановки, принудительное закрытие")
 		_ = s.srv.Close()

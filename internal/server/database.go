@@ -73,6 +73,40 @@ func (s *Server) closeDatabase() {
 	closeDatabaseHandle(s.logger, s.sqlDB)
 }
 
+func (s *Server) closeDatabaseBeforeDeadline(ctx context.Context) error {
+	if s.sqlDB == nil {
+		return nil
+	}
+
+	return closeDatabaseWithin(ctx, s.logger, s.sqlDB.Close)
+}
+
+// closeDatabaseWithin начинает Close в любом случае, но ждёт его только
+// в пределах общего shutdown context.
+func closeDatabaseWithin(
+	ctx context.Context,
+	logger *zap.Logger,
+	closeDatabase func() error,
+) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- closeDatabase()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			logger.Warn("Не удалось закрыть соединение с БД", zap.Error(err))
+		}
+		return err
+	case <-ctx.Done():
+		err := context.Cause(ctx)
+		logger.Warn("Не удалось завершить закрытие соединения с БД", zap.Error(err))
+		return err
+	}
+}
+
+// closeDatabaseHandle закрывает пул и до появления сервера, и вместе с ним.
 func closeDatabaseHandle(logger *zap.Logger, sqlDB *sql.DB) {
 	if sqlDB == nil {
 		return
