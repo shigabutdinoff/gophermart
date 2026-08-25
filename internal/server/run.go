@@ -117,6 +117,7 @@ func (s *Server) queueActor(ctx context.Context, readyChannels ...<-chan struct{
 			interruptOnce.Do(func() {
 				close(interrupted)
 				cancelStart()
+				s.deps.runner.CancelStart()
 			})
 		}
 }

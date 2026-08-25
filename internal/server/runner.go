@@ -33,6 +33,7 @@ type riverRunnerCommandKind uint8
 
 const (
 	riverRunnerStart riverRunnerCommandKind = iota
+	riverRunnerCancelStart
 	riverRunnerStop
 	riverRunnerStartFinished
 	riverRunnerStopFinished
@@ -120,6 +121,16 @@ func (r *riverRunner) Start(ctx context.Context) error {
 	return <-reply
 }
 
+// CancelStart устанавливает latch до подтверждения вызова. Поднятую очередь
+// этот сигнал не отменяет: её сворачивает Stop с общим shutdown context.
+func (r *riverRunner) CancelStart() {
+	reply := make(chan error, 1)
+	if !r.send(riverRunnerCommand{kind: riverRunnerCancelStart, reply: reply}) {
+		return
+	}
+	<-reply
+}
+
 func (r *riverRunner) Stop(ctx context.Context) error {
 	reply := make(chan error, 1)
 	if !r.send(riverRunnerCommand{kind: riverRunnerStop, ctx: ctx, reply: reply}) {
@@ -163,6 +174,8 @@ func (r *riverRunner) handleCommand(
 	switch command.kind {
 	case riverRunnerStart:
 		r.handleStart(state, command)
+	case riverRunnerCancelStart:
+		r.handleCancelStart(state, command)
 	case riverRunnerStop:
 		r.handleStop(state, command)
 	case riverRunnerStartFinished:
@@ -197,7 +210,9 @@ func (r *riverRunner) handleStart(
 		if state.startCancel != nil {
 			state.startCancel()
 		}
-		state.startCtx, state.startCancel = context.WithCancel(command.ctx)
+		state.startCtx, state.startCancel = context.WithCancel(
+			context.WithoutCancel(command.ctx),
+		)
 		state.phase = riverRunnerStarting
 		state.startPending = true
 		state.startWaiters = append(state.startWaiters, command.reply)
@@ -298,6 +313,17 @@ func (r *riverRunner) handleStartFinished(
 	state.watchStopped = state.riverStopped
 	resolveRiverRunnerWaiters(state.startWaiters, nil)
 	state.startWaiters = nil
+}
+
+func (r *riverRunner) handleCancelStart(
+	state *riverRunnerActorState,
+	command riverRunnerCommand,
+) {
+	state.cancelRequested = true
+	if state.startPending && state.startCancel != nil {
+		state.startCancel()
+	}
+	command.reply <- nil
 }
 
 func (r *riverRunner) handleStop(
