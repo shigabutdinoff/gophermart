@@ -190,6 +190,10 @@ func isPermanent(err error) bool {
 	if errors.Is(err, accrual.ErrMalformedResponse) || errors.Is(err, accrual.ErrUnknownStatus) {
 		return true
 	}
+	// тело сверх предела клиента не станет короче и на последней попытке
+	if errors.Is(err, accrual.ErrResponseTooLarge) {
+		return true
+	}
 	unexpected, ok := errors.AsType[*accrual.UnexpectedStatusError](err)
 
 	return ok && unexpected.StatusCode >= http.StatusBadRequest &&
