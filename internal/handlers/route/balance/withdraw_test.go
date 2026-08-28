@@ -22,8 +22,12 @@ import (
 )
 
 func serveWithdraw(handler http.Handler, body string) *httptest.ResponseRecorder {
+	return serveWithdrawAs(handler, "application/json", body)
+}
+
+func serveWithdrawAs(handler http.Handler, contentType, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodPost, withdrawPath, strings.NewReader(body))
-	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Type", contentType)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 
@@ -147,32 +151,44 @@ func TestWithdrawValidatesJSONAndValuesBeforeRepository(t *testing.T) {
 
 func TestWithdrawRejectsRequestBeforeService(t *testing.T) {
 	tests := []struct {
-		name       string
-		userID     int64
-		body       string
-		bodyLimit  int64
-		wantStatus int
+		name        string
+		userID      int64
+		contentType string
+		body        string
+		bodyLimit   int64
+		wantStatus  int
 	}{
 		{
-			name:       "without user",
-			body:       `{"order":"2377225624","sum":1}`,
-			bodyLimit:  testBodyLimit,
-			wantStatus: http.StatusUnauthorized,
+			name:        "without user",
+			contentType: "application/json",
+			body:        `{"order":"2377225624","sum":1}`,
+			bodyLimit:   testBodyLimit,
+			wantStatus:  http.StatusUnauthorized,
 		},
 		{
-			name:       "body over limit",
-			userID:     testUserID,
-			body:       `{"order":"2377225624","sum":1}`,
-			bodyLimit:  8,
-			wantStatus: http.StatusRequestEntityTooLarge,
+			name:        "unsupported content type",
+			userID:      testUserID,
+			contentType: "text/plain",
+			body:        `{"order":"2377225624","sum":1}`,
+			bodyLimit:   testBodyLimit,
+			wantStatus:  http.StatusUnsupportedMediaType,
+		},
+		{
+			name:        "body over limit",
+			userID:      testUserID,
+			contentType: "application/json",
+			body:        `{"order":"2377225624","sum":1}`,
+			bodyLimit:   8,
+			wantStatus:  http.StatusRequestEntityTooLarge,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
-			response := serveWithdraw(
+			response := serveWithdrawAs(
 				newRouterWithBodyLimit(zap.NewNop(), withdrawReturning(nil, &calls), test.userID, test.bodyLimit),
+				test.contentType,
 				test.body,
 			)
 
