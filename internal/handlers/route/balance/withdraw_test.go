@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	domain "github.com/shigabutdinoff/gophermart/internal/balance"
+	balancemocks "github.com/shigabutdinoff/gophermart/internal/balance/mocks"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 	"github.com/shigabutdinoff/gophermart/internal/money"
 	"github.com/shigabutdinoff/gophermart/internal/ordernumber"
@@ -37,21 +38,6 @@ func withdrawReturning(err error, calls *int) Deps {
 
 		return err
 	}}
-}
-
-type routeWithdrawer struct {
-	calls int
-}
-
-func (w *routeWithdrawer) Withdraw(
-	context.Context,
-	int64,
-	string,
-	money.Points,
-) (domain.WithdrawOutcome, error) {
-	w.calls++
-
-	return domain.Withdrawn, nil
 }
 
 func TestWithdrawReturnsEmptyOKAndPassesBodyWithUser(t *testing.T) {
@@ -145,7 +131,7 @@ func TestWithdrawValidatesJSONAndValuesBeforeRepository(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			storage := &routeWithdrawer{}
+			storage := balancemocks.NewMockWithdrawer(t)
 			deps := Deps{Withdraw: domain.NewWithdrawService(storage).Withdraw}
 
 			response := serveWithdraw(
@@ -154,7 +140,6 @@ func TestWithdrawValidatesJSONAndValuesBeforeRepository(t *testing.T) {
 			)
 
 			assert.Equal(t, test.wantStatus, response.Code)
-			assert.Zero(t, storage.calls)
 		})
 	}
 }

@@ -18,6 +18,7 @@ packages:
     interfaces:
       Reader:
       WithdrawalLister:
+      Withdrawer:
   github.com/shigabutdinoff/gophermart/internal/auth:
     interfaces:
       PasswordHasher:
