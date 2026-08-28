@@ -150,6 +150,7 @@ func registerWithdrawRoute(
 			http.StatusBadRequest,
 			http.StatusUnauthorized,
 			http.StatusPaymentRequired,
+			http.StatusRequestEntityTooLarge,
 			http.StatusUnprocessableEntity,
 			http.StatusInternalServerError,
 		},

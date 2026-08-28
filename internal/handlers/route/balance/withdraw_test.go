@@ -159,6 +159,43 @@ func TestWithdrawValidatesJSONAndValuesBeforeRepository(t *testing.T) {
 	}
 }
 
+func TestWithdrawRejectsRequestBeforeService(t *testing.T) {
+	tests := []struct {
+		name       string
+		userID     int64
+		body       string
+		bodyLimit  int64
+		wantStatus int
+	}{
+		{
+			name:       "without user",
+			body:       `{"order":"2377225624","sum":1}`,
+			bodyLimit:  testBodyLimit,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "body over limit",
+			userID:     testUserID,
+			body:       `{"order":"2377225624","sum":1}`,
+			bodyLimit:  8,
+			wantStatus: http.StatusRequestEntityTooLarge,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			response := serveWithdraw(
+				newRouterWithBodyLimit(zap.NewNop(), withdrawReturning(nil, &calls), test.userID, test.bodyLimit),
+				test.body,
+			)
+
+			assert.Equal(t, test.wantStatus, response.Code)
+			assert.Zero(t, calls)
+		})
+	}
+}
+
 func TestWithdrawWithoutRouteAuthorizationRejectsMissingUser(t *testing.T) {
 	calls := 0
 	response := serveWithdraw(

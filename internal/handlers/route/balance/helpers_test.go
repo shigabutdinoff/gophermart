@@ -18,13 +18,22 @@ const (
 )
 
 func newRouter(logger *zap.Logger, deps Deps) http.Handler {
+	return newRouterWithBodyLimit(logger, deps, testUserID, testBodyLimit)
+}
+
+func newRouterWithBodyLimit(
+	logger *zap.Logger,
+	deps Deps,
+	userID int64,
+	bodyLimit int64,
+) http.Handler {
 	router := chi.NewRouter()
 	api := apiconfig.NewAPI(router)
 	authorize := authorization.Middleware(
 		api,
-		func(*http.Request, request.Extractor) (int64, error) { return testUserID, nil },
+		func(*http.Request, request.Extractor) (int64, error) { return userID, nil },
 	)
-	RegisterRoutes(api, logger, deps, Options{BodyLimit: testBodyLimit, Middlewares: huma.Middlewares{
+	RegisterRoutes(api, logger, deps, Options{BodyLimit: bodyLimit, Middlewares: huma.Middlewares{
 		authorize,
 	}})
 
