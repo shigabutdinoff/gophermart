@@ -40,6 +40,7 @@ func TestCheckAccrual_CancelsJobOnPermanentAnswer(t *testing.T) {
 		{name: "неизвестный статус", err: accrual.ErrUnknownStatus},
 		{name: "запрос отвергнут", err: &accrual.UnexpectedStatusError{StatusCode: http.StatusBadRequest}},
 		{name: "последний код клиента", err: &accrual.UnexpectedStatusError{StatusCode: 499}},
+		{name: "ответ длиннее предела", err: accrual.ErrResponseTooLarge},
 	}
 
 	for _, test := range tests {
