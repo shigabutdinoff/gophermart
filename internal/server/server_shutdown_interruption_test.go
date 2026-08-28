@@ -54,6 +54,45 @@ func TestServer_InterruptCancelsBlockedRunnerStartAndClosesDatabase(t *testing.T
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestServer_InterruptLeavesStartedQueueContextAlone(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	mock.ExpectPing()
+	mock.ExpectClose()
+
+	lifecycle := newShutdownRiverLifecycle()
+	lifecycle.closeOnStop = true
+	s := &Server{
+		router:          chi.NewRouter(),
+		logger:          zap.NewNop(),
+		shutdownTimeout: time.Second,
+		retryDelay:      time.Nanosecond,
+		migrateDatabase: successfulTestMigration,
+		sqlDB:           sqlDB,
+		deps: deps{
+			runner: newMockedShutdownRunner(t, lifecycle, &shutdownThrottleLifecycle{}),
+		},
+	}
+	s.runAddress = "127.0.0.1:0"
+	signalCtx, cancel := context.WithCancel(context.Background())
+	done := startServer(t, signalCtx, s)
+	receiveWithin(t, lifecycle.startCalled)
+	require.Eventually(t, func() bool {
+		return countCalls(lifecycle.callLog(), "stopped") >= 1
+	}, time.Second, time.Millisecond)
+
+	cancel()
+	require.NoError(t, receiveWithin(t, done))
+	lifecycle.mu.Lock()
+	assert.True(t, lifecycle.startCtxLiveAtStop, "поднятую очередь сворачивает остановка, а не отмена")
+	lifecycle.mu.Unlock()
+	assert.Equal(t, 1, countCalls(lifecycle.callLog(), "start"))
+	assert.Equal(t, 1, countCalls(lifecycle.callLog(), "stop"), "поднятая очередь ждёт мягкой остановки")
+	assert.Zero(t, countCalls(lifecycle.callLog(), "stop_and_cancel"))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestServer_StartupResumeFailureCleansThrottleBeforeDatabaseClose(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)

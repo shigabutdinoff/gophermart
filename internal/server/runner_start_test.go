@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"testing/synctest"
 
@@ -46,6 +47,50 @@ func TestRiverRunner_SuccessfulStartReturnsNilWhenContextIsCanceledAtReturn(t *t
 	})
 }
 
+func TestRiverRunner_PublishedSuccessfulStartCannotBeCanceled(t *testing.T) {
+	lifecycle := newRiverLifecycleHarness()
+	lifecycle.closeOnStop = true
+	runner := newMockedRiverRunner(t, lifecycle, &throttleLifecycleHarness{})
+
+	require.NoError(t, runner.Start(context.Background()))
+	runner.CancelStart()
+
+	lifecycle.mu.Lock()
+	assert.NoError(t, lifecycle.startCtx.Err(), "поднятую очередь сворачивает остановка")
+	lifecycle.mu.Unlock()
+	require.NoError(t, runner.Stop(context.Background()))
+}
+
+func TestRiverRunner_CancelStartDuringGracefulStopKeepsStartContextLive(t *testing.T) {
+	lifecycle := newRiverLifecycleHarness()
+	lifecycle.closeOnStop = true
+	releaseStop := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseStop) })
+	}
+	t.Cleanup(release)
+	lifecycle.stopHook = func(context.Context) {
+		<-releaseStop
+	}
+	runner := newMockedRiverRunner(t, lifecycle, &throttleLifecycleHarness{})
+	require.NoError(t, runner.Start(context.Background()))
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- runner.Stop(context.Background()) }()
+	receiveWithin(t, lifecycle.stopCalled)
+
+	runner.CancelStart()
+
+	lifecycle.mu.Lock()
+	assert.NoError(t, lifecycle.startCtx.Err(), "graceful Stop owns the live River context")
+	lifecycle.mu.Unlock()
+	release()
+	require.NoError(t, receiveWithin(t, stopDone))
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+	assert.ErrorIs(t, lifecycle.startCtx.Err(), context.Canceled)
+}
+
 // Свёрнутой очереди контекст держать некому: остановка его освобождает.
 func TestRiverRunner_StopReleasesStartContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -61,6 +106,34 @@ func TestRiverRunner_StopReleasesStartContext(t *testing.T) {
 		assert.True(t, lifecycle.startCtxLiveAtStop, "остановка застаёт контекст живым")
 		assert.ErrorIs(t, lifecycle.startCtx.Err(), context.Canceled)
 	})
+}
+
+func TestRiverRunner_PrerequestedCancelKeepsQueueDown(t *testing.T) {
+	lifecycle := newRiverLifecycleHarness()
+	throttle := &throttleLifecycleHarness{}
+	runner := newMockedRiverRunner(t, lifecycle, throttle)
+
+	runner.CancelStart()
+	err := runner.Start(context.Background())
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, lifecycle.callLog(), "очередь не поднимается под остановку")
+	assert.Nil(t, throttle.snapshot().resumeCtx, "снимать паузу очереди тоже незачем")
+}
+
+func TestRiverRunner_BlockedStartCanBeCanceled(t *testing.T) {
+	lifecycle := newRiverLifecycleHarness()
+	lifecycle.waitForStartContext = true
+	t.Cleanup(lifecycle.releaseStart)
+	runner := newMockedRiverRunner(t, lifecycle, &throttleLifecycleHarness{})
+	done := make(chan error, 1)
+	go func() { done <- runner.Start(context.Background()) }()
+	receiveWithin(t, lifecycle.startCalled)
+
+	runner.CancelStart()
+
+	require.ErrorIs(t, receiveWithin(t, done), context.Canceled)
+	assert.Equal(t, 1, countCalls(lifecycle.callLog(), "start"))
 }
 
 func TestRiverRunner_ConcurrentStartWaitsForSameAttempt(t *testing.T) {
@@ -103,6 +176,25 @@ func TestRiverRunner_StartWhileStartedDoesNotStartRiverAgain(t *testing.T) {
 		assert.Equal(t, 1, countCalls(lifecycle.callLog(), "start"))
 		require.NoError(t, runner.Stop(context.Background()))
 	})
+}
+
+func TestRiverRunner_RetryUsesFreshLifecycleContext(t *testing.T) {
+	resumeErr := errors.New("resume")
+	lifecycle := newRiverLifecycleHarness()
+	lifecycle.closeOnStop = true
+	throttle := &throttleLifecycleHarness{resumeErr: resumeErr}
+	runner := newMockedRiverRunner(t, lifecycle, throttle)
+
+	firstCtx := context.WithValue(context.Background(), runnerContextKey{}, "first")
+	require.ErrorIs(t, runner.Start(firstCtx), resumeErr)
+	throttle.setResumeError(nil)
+	secondCtx := context.WithValue(context.Background(), runnerContextKey{}, "second")
+	require.NoError(t, runner.Start(secondCtx))
+
+	lifecycle.mu.Lock()
+	assert.Equal(t, "second", lifecycle.startCtx.Value(runnerContextKey{}))
+	lifecycle.mu.Unlock()
+	require.NoError(t, runner.Stop(context.Background()))
 }
 
 func TestRiverRunner_CapturesStoppedBeforePublishingStart(t *testing.T) {
