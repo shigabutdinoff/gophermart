@@ -33,9 +33,13 @@ func newRouterWithBodyLimit(
 		api,
 		func(*http.Request, request.Extractor) (int64, error) { return userID, nil },
 	)
-	RegisterRoutes(api, logger, deps, Options{BodyLimit: bodyLimit, Middlewares: huma.Middlewares{
-		authorize,
-	}})
+	RegisterRoutes(api, logger, deps, Options{
+		BodyLimit: bodyLimit,
+		Middlewares: huma.Middlewares{
+			authorize,
+			apiconfig.AllowContentType("application/json"),
+		},
+	})
 
 	return router
 }
