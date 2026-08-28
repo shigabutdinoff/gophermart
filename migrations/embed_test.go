@@ -55,6 +55,7 @@ func TestFSContainsWithdrawalsMigration(t *testing.T) {
 	assert.Contains(t, sql, "CREATE TABLE withdrawals")
 	assert.Contains(t, sql, "user_id BIGINT NOT NULL REFERENCES users (id)")
 	assert.Contains(t, sql, "CONSTRAINT withdrawals_sum_positive CHECK (sum > 0)")
+	assert.Contains(t, sql, "CONSTRAINT withdrawals_order_number_key UNIQUE (order_number)")
 	assert.NotContains(t, sql, "CREATE INDEX")
 	assert.Contains(t, sql, "COMMENT ON COLUMN withdrawals.sum IS 'Списанные баллы в копейках';")
 
