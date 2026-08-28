@@ -1,15 +1,41 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/shigabutdinoff/gophermart/internal/auth"
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 )
+
+func TestNew_SignsWithKeyStoredAtStartup(t *testing.T) {
+	directory := t.TempDir()
+	t.Chdir(directory)
+
+	server, err := New(zap.NewNop(), config.Default())
+
+	require.NoError(t, err)
+	t.Cleanup(server.closeDatabase)
+	values, err := godotenv.Read(filepath.Join(directory, auth.SecretEnvFile))
+	require.NoError(t, err)
+	assert.Regexp(t, `^[0-9a-f]{64}$`, values[auth.SecretEnvName])
+}
+
+func TestNew_FailsWhenSigningKeyCannotBeStored(t *testing.T) {
+	t.Chdir(t.TempDir())
+	require.NoError(t, os.Mkdir(auth.SecretEnvFile, 0o700))
+
+	_, err := New(zap.NewNop(), config.Default())
+
+	require.ErrorContains(t, err, "save signing key")
+}
 
 func TestNew(t *testing.T) {
 	s := mustNew(t, zap.NewNop(), config.Default())

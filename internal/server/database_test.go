@@ -63,6 +63,15 @@ func TestOpenDatabase_EmptyDSN(t *testing.T) {
 	require.Equal(t, 1, logs.FilterMessage("Не удалось открыть соединение с БД").Len())
 }
 
+func TestPinger_WithoutDatabaseReportsUnavailable(t *testing.T) {
+	s, _ := newObservedServer(t, "")
+
+	pinger := s.pinger()
+
+	require.NotNil(t, pinger, "проверка готовности не должна встречать пустой Pinger")
+	assert.ErrorIs(t, pinger.PingContext(context.Background()), database.ErrUnavailable)
+}
+
 func TestOpenDatabase_MalformedDSNDoesNotLeakCredentials(t *testing.T) {
 	s, logs := newObservedServer(t, "postgresql://user:SECRETPW@bad host:5432/praktikum")
 	assert.Nil(t, s.sqlDB)
@@ -73,17 +82,28 @@ func TestOpenDatabase_MalformedDSNDoesNotLeakCredentials(t *testing.T) {
 
 func TestInitDatabase_UnavailableDatabaseKeepsHandleAndSkipsMigration(t *testing.T) {
 	s, logs := newObservedServer(t, unavailableDatabaseDSN)
+	s.retryDelay = time.Millisecond
 	migrationCalls := 0
-	s.initDatabase(context.Background(), func(context.Context, *sql.DB) error {
+
+	initErr := s.initDatabase(context.Background(), func(context.Context, *sql.DB) error {
 		migrationCalls++
 		return nil
 	})
-	require.NotNil(t, s.sqlDB)
+
+	require.Error(t, initErr)
+	require.NotNil(t, s.sqlDB, "хэндл сохраняется для самовосстановления")
 	t.Cleanup(s.closeDatabase)
 	assert.Zero(t, migrationCalls)
+
+	entries := logs.All()
+	require.Len(t, entries, 4)
+	assert.Equal(t, 3, logs.FilterMessage("Повторная попытка подключения к БД").Len())
 	skipped := logs.FilterMessage("БД недоступна, миграции пропущены").All()
 	require.Len(t, skipped, 1)
 	assert.Equal(t, zap.ErrorLevel, skipped[0].Level)
+	assert.NotEmpty(t, skipped[0].ContextMap()["error"])
+	assert.Zero(t, logs.FilterMessage("Не удалось применить миграции").Len())
+	assert.Zero(t, logs.FilterMessage("Миграции выполнены").Len())
 }
 
 func TestInitDatabase_SuccessfulPingHandlesMigrationResult(t *testing.T) {
@@ -94,26 +114,61 @@ func TestInitDatabase_SuccessfulPingHandlesMigrationResult(t *testing.T) {
 		expectedMessage string
 		expectedLevel   zapcore.Level
 	}{
-		{"migration error", migrationErr, "Не удалось применить миграции", zap.ErrorLevel},
-		{"migrations applied", nil, "Миграции выполнены", zap.InfoLevel},
+		{
+			name:            "migration error",
+			migrationErr:    migrationErr,
+			expectedMessage: "Не удалось применить миграции",
+			expectedLevel:   zap.ErrorLevel,
+		},
+		{
+			name:            "migrations applied",
+			expectedMessage: "Миграции выполнены",
+			expectedLevel:   zap.InfoLevel,
+		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, logs := newObservedServer(t, "postgresql://user:password@db:5432/gophermart")
+			const dsn = "postgresql://user:password@db:5432/gophermart"
+			s, logs := newObservedServer(t, dsn)
 			handle, mock := newPingMock(t, nil)
-			s.sqlDB = handle
 			migrationCalls := 0
-			s.initDatabase(context.Background(), func(_ context.Context, db *sql.DB) error {
-				migrationCalls++
-				assert.Same(t, handle, db)
-				return tt.migrationErr
-			})
+			var gotDB *sql.DB
+			var gotCtx context.Context
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			s.sqlDB = handle
+			initErr := s.initDatabase(
+				ctx,
+				func(migrateCtx context.Context, db *sql.DB) error {
+					migrationCalls++
+					gotCtx = migrateCtx
+					gotDB = db
+					return tt.migrationErr
+				},
+			)
+
+			if tt.migrationErr == nil {
+				require.NoError(t, initErr)
+			} else {
+				require.ErrorIs(t, initErr, tt.migrationErr)
+			}
 			require.NoError(t, mock.ExpectationsWereMet())
 			assert.Equal(t, 1, migrationCalls)
+			assert.Same(t, handle, gotDB)
+			require.NoError(t, gotCtx.Err())
+			cancel()
+			assert.Error(t, gotCtx.Err(), "миграции обязаны видеть отмену контекста запуска")
+
 			entries := logs.All()
 			require.Len(t, entries, 1)
 			assert.Equal(t, tt.expectedMessage, entries[0].Message)
 			assert.Equal(t, tt.expectedLevel, entries[0].Level)
+			if tt.migrationErr != nil {
+				assert.Equal(t, tt.migrationErr.Error(), entries[0].ContextMap()["error"])
+			}
+			assert.Zero(t, logs.FilterMessage("БД недоступна, миграции пропущены").Len())
 		})
 	}
 }
@@ -135,6 +190,17 @@ func TestInitDatabase_RetriesUntilDatabaseAppears(t *testing.T) {
 	assert.Equal(t, 1, migrationCalls)
 	assert.Equal(t, 1, logs.FilterMessage("Повторная попытка подключения к БД").Len())
 	assert.Equal(t, 1, logs.FilterMessage("Миграции выполнены").Len())
+}
+
+func TestCloseDatabase_ClosedPoolFailsReadiness(t *testing.T) {
+	s, _ := newServerWithDatabase(t)
+	require.NotNil(t, s.pinger())
+
+	s.closeDatabase()
+
+	err := s.pinger().PingContext(context.Background())
+	assert.EqualError(t, err, "sql: database is closed", "закрытый пул не проходит проверку готовности")
+	assert.NotPanics(t, s.closeDatabase, "повторное закрытие безопасно")
 }
 
 func TestInitDatabase_LimitsEachPingAttempt(t *testing.T) {
@@ -233,6 +299,7 @@ func TestServerSharesOnePoolAcrossRepositoryMigrationsAndShutdown(t *testing.T) 
 	server.router.ServeHTTP(httptest.NewRecorder(), request)
 
 	assert.Same(t, sqlDB, repositoryPool())
+	assert.Same(t, sqlDB, server.pinger())
 
 	mock.ExpectPing()
 	var migrationPool *sql.DB
