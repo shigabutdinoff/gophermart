@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/shigabutdinoff/gophermart/internal/ordernumber"
 )
 
 type fakeStorage struct {
@@ -47,8 +49,8 @@ func TestUploadRejectsNumberBeforeStorage(t *testing.T) {
 		number string
 		want   error
 	}{
-		{name: "пустое тело", number: "  \n", want: ErrEmptyNumber},
-		{name: "не проходит Луна", number: "12345678902", want: ErrInvalidNumber},
+		{name: "пустое тело", number: "  \n", want: ordernumber.ErrEmpty},
+		{name: "не проходит Луна", number: "12345678902", want: ordernumber.ErrInvalid},
 	}
 
 	for _, test := range tests {
@@ -92,8 +94,8 @@ func TestUploadMapsCreateOutcome(t *testing.T) {
 
 func TestUploadRejectsUnknownCreateOutcome(t *testing.T) {
 	handlerSentinels := []error{
-		ErrEmptyNumber,
-		ErrInvalidNumber,
+		ordernumber.ErrEmpty,
+		ordernumber.ErrInvalid,
 		ErrAlreadyUploaded,
 		ErrOwnedByAnother,
 	}

@@ -9,8 +9,6 @@ import (
 )
 
 var (
-	ErrEmptyNumber     = errors.New("order number is empty")
-	ErrInvalidNumber   = errors.New("order number is invalid")
 	ErrAlreadyUploaded = errors.New("order is already uploaded by the same user")
 	ErrOwnedByAnother  = errors.New("order is uploaded by another user")
 	ErrNotFound        = errors.New("order is not found")

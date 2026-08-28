@@ -18,6 +18,7 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 	"github.com/shigabutdinoff/gophermart/internal/order"
+	"github.com/shigabutdinoff/gophermart/internal/ordernumber"
 )
 
 func serveUpload(handler http.Handler, contentType, body string) *httptest.ResponseRecorder {
@@ -67,13 +68,13 @@ func TestUploadAnswersBySpecification(t *testing.T) {
 		},
 		{
 			name:       "номер из пробелов",
-			uploadErr:  order.ErrEmptyNumber,
+			uploadErr:  ordernumber.ErrEmpty,
 			wantStatus: http.StatusBadRequest,
 			wantBody:   MessageEmptyNumber,
 		},
 		{
 			name:       "номер не проходит проверку",
-			uploadErr:  order.ErrInvalidNumber,
+			uploadErr:  ordernumber.ErrInvalid,
 			wantStatus: http.StatusUnprocessableEntity,
 			wantBody:   MessageInvalidNumber,
 		},

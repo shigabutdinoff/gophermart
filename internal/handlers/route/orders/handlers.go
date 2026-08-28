@@ -13,6 +13,7 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
 	"github.com/shigabutdinoff/gophermart/internal/money"
 	"github.com/shigabutdinoff/gophermart/internal/order"
+	"github.com/shigabutdinoff/gophermart/internal/ordernumber"
 )
 
 // Тексты ответов маршрутов заказов.
@@ -104,9 +105,9 @@ func registerUploadRoute(
 			return &uploadOutput{Status: http.StatusAccepted}, nil
 		case errors.Is(err, order.ErrAlreadyUploaded):
 			return &uploadOutput{Status: http.StatusOK}, nil
-		case errors.Is(err, order.ErrEmptyNumber):
+		case errors.Is(err, ordernumber.ErrEmpty):
 			return nil, huma.Error400BadRequest(MessageEmptyNumber)
-		case errors.Is(err, order.ErrInvalidNumber):
+		case errors.Is(err, ordernumber.ErrInvalid):
 			return nil, huma.Error422UnprocessableEntity(MessageInvalidNumber)
 		case errors.Is(err, order.ErrOwnedByAnother):
 			return nil, huma.Error409Conflict(MessageNumberTaken)

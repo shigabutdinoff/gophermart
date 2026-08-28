@@ -3,6 +3,8 @@ package order
 import (
 	"context"
 	"fmt"
+
+	"github.com/shigabutdinoff/gophermart/internal/ordernumber"
 )
 
 // UploadService принимает номер заказа и определяет исход загрузки.
@@ -14,10 +16,10 @@ func NewUploadService(orders Creator) *UploadService {
 	return &UploadService{orders: orders}
 }
 
-// Upload ждёт номер в том виде, в каком он пришёл в теле запроса.
+// Upload принимает сырой номер, нормализует и валидирует его.
 func (s *UploadService) Upload(ctx context.Context, number string, userID int64) error {
-	number = Normalize(number)
-	if err := Validate(number); err != nil {
+	number, err := ordernumber.Parse(number)
+	if err != nil {
 		return err
 	}
 
