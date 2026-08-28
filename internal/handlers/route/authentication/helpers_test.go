@@ -35,6 +35,7 @@ func newRouter(logger *zap.Logger, deps Deps, bodyLimit int64) http.Handler {
 		BodyLimit: bodyLimit,
 		Middlewares: huma.Middlewares{
 			apiconfig.AllowContentType("application/json"),
+			apiconfig.ClientIPFromRemoteAddr,
 		},
 	})
 
