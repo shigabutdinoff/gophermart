@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -23,12 +24,17 @@ import (
 
 const unavailableDatabaseDSN = "postgresql://postgres:postgres@localhost:1/praktikum?sslmode=disable"
 
-func newPingMock(t *testing.T, pingErr error) (*sql.DB, sqlmock.Sqlmock) {
+// newPingMock собирает пул, где каждый Ping отвечает своей ошибкой из errs
+func newPingMock(t *testing.T, errs ...error) (*sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
+
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	mock.ExpectPing().WillReturnError(pingErr)
+
+	for _, pingErr := range errs {
+		mock.ExpectPing().WillReturnError(pingErr)
+	}
 	return db, mock
 }
 
@@ -161,4 +167,63 @@ func TestServer_Run_ClosesDatabaseOnListenError(t *testing.T) {
 	s.runAddress = "bad::addr"
 	require.Error(t, s.Run(context.Background()))
 	assert.EqualError(t, oldDB.PingContext(context.Background()), "sql: database is closed")
+}
+
+func TestCloseDatabaseWithin_ReturnsAtSharedDeadlineAndLeavesAttemptReleasable(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	called := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := closeDatabaseWithin(ctx, zap.New(core), func() error {
+		close(called)
+		defer close(finished)
+		<-release
+		return nil
+	})
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	receiveWithin(t, called)
+	assert.Equal(t, 1, logs.FilterMessage("Не удалось завершить закрытие соединения с БД").Len())
+
+	close(release)
+	receiveWithin(t, finished)
+}
+
+func TestCloseDatabaseWithin_ReportsCloseResult(t *testing.T) {
+	closeErr := errors.New("close database")
+	tests := []struct {
+		name        string
+		closeErr    error
+		wantMessage string
+	}{
+		{name: "success"},
+		{
+			name:        "close error",
+			closeErr:    closeErr,
+			wantMessage: "Не удалось закрыть соединение с БД",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			core, logs := observer.New(zap.WarnLevel)
+			calls := 0
+
+			err := closeDatabaseWithin(context.Background(), zap.New(core), func() error {
+				calls++
+				return tt.closeErr
+			})
+
+			require.ErrorIs(t, err, tt.closeErr)
+			assert.Equal(t, 1, calls)
+			if tt.wantMessage == "" {
+				assert.Zero(t, logs.Len())
+			} else {
+				assert.Equal(t, 1, logs.FilterMessage(tt.wantMessage).Len())
+			}
+		})
+	}
 }

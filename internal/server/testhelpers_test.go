@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -32,4 +33,27 @@ func mustNew(t *testing.T, logger *zap.Logger, cfg config.Config, options ...Opt
 	server, err := New(logger, cfg, options...)
 	require.NoError(t, err)
 	return server
+}
+
+// notify отправляет сигнал, не блокируя отправителя на полном канале.
+func notify(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+// receiveWithin ждёт события на реальных часах, вне synctest-бабла.
+func receiveWithin[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(time.Second):
+		require.FailNow(t, "канал не ответил вовремя")
+		var zero T
+
+		return zero
+	}
 }

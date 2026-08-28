@@ -14,11 +14,12 @@ import (
 
 func TestNewQueueClient_WithoutDatabaseStaysEmpty(t *testing.T) {
 	queue, err := newQueueClient(queueOptions{
-		logger:         zap.NewNop(),
-		queue:          newTestConfig().Queue,
-		accrualAddress: testAccrualAddress,
-		storedOrders:   orderrepository.New(database.Session{}),
-		sqlDB:          nil,
+		logger:          zap.NewNop(),
+		queue:           newTestConfig().Queue,
+		accrualAddress:  testAccrualAddress,
+		storedOrders:    orderrepository.New(database.Session{}),
+		sqlDB:           nil,
+		shutdownTimeout: DefaultShutdownTimeout,
 	})
 
 	require.NoError(t, err)
@@ -33,11 +34,12 @@ func TestNewQueueClient_UnusableAccrualAddressLeavesQueueForDispatchOnly(t *test
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	queue, err := newQueueClient(queueOptions{
-		logger:         zap.New(core),
-		queue:          newTestConfig().Queue,
-		accrualAddress: "",
-		storedOrders:   orderrepository.New(session),
-		sqlDB:          sqlDB,
+		logger:          zap.New(core),
+		queue:           newTestConfig().Queue,
+		accrualAddress:  "",
+		storedOrders:    orderrepository.New(session),
+		sqlDB:           sqlDB,
+		shutdownTimeout: DefaultShutdownTimeout,
 	})
 
 	require.NoError(t, err)
@@ -53,11 +55,12 @@ func TestNewQueueClient_SyntacticallyInvalidAccrualAddressHasNoWorkerController(
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	queue, err := newQueueClient(queueOptions{
-		logger:         zap.New(core),
-		queue:          newTestConfig().Queue,
-		accrualAddress: "htp://localhost:8080",
-		storedOrders:   orderrepository.New(session),
-		sqlDB:          sqlDB,
+		logger:          zap.New(core),
+		queue:           newTestConfig().Queue,
+		accrualAddress:  "htp://localhost:8080",
+		storedOrders:    orderrepository.New(session),
+		sqlDB:           sqlDB,
+		shutdownTimeout: DefaultShutdownTimeout,
 	})
 
 	require.NoError(t, err)
@@ -72,11 +75,12 @@ func TestNewQueueClient_UsableAccrualAddressGivesWorkingQueue(t *testing.T) {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	queue, err := newQueueClient(queueOptions{
-		logger:         zap.NewNop(),
-		queue:          newTestConfig().Queue,
-		accrualAddress: testAccrualAddress,
-		storedOrders:   orderrepository.New(session),
-		sqlDB:          sqlDB,
+		logger:          zap.NewNop(),
+		queue:           newTestConfig().Queue,
+		accrualAddress:  testAccrualAddress,
+		storedOrders:    orderrepository.New(session),
+		sqlDB:           sqlDB,
+		shutdownTimeout: DefaultShutdownTimeout,
 	})
 
 	require.NoError(t, err)

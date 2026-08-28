@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -23,11 +26,12 @@ func TestBuildDepsSharesOneOrderRepositoryBetweenHTTPAndWorkers(t *testing.T) {
 	var workerOrders domain.ResultWriter
 
 	built, err := buildDeps(depsOptions{
-		logger:         zap.NewNop(),
-		queue:          newTestConfig().Queue,
-		accrualAddress: testAccrualAddress,
-		session:        session,
-		tokens:         tokens,
+		logger:          zap.NewNop(),
+		queue:           newTestConfig().Queue,
+		accrualAddress:  testAccrualAddress,
+		session:         session,
+		tokens:          tokens,
+		shutdownTimeout: DefaultShutdownTimeout,
 		buildQueue: func(options queueOptions) (queueParts, error) {
 			workerOrders = options.storedOrders
 
@@ -80,4 +84,30 @@ func TestBuildDepsGivesQueueOnlyItsOwnSettings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testAccrualAddress, passed.accrualAddress)
 	assert.Equal(t, config.Default().Queue, passed.queue)
+}
+
+func TestBuildDepsBuildsPendingOrderResumerWithQueue(t *testing.T) {
+	session, _ := testkit.NewDryRunSession(t)
+	sqlDB, _, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	client, err := river.NewClient(riverdatabasesql.New(sqlDB), &river.Config{})
+	require.NoError(t, err)
+	tokens, err := auth.NewJWTManager([]byte(testJWTSecret))
+	require.NoError(t, err)
+
+	_, err = buildDeps(depsOptions{
+		logger:          zap.NewNop(),
+		queue:           newTestConfig().Queue,
+		accrualAddress:  testAccrualAddress,
+		session:         session,
+		sqlDB:           sqlDB,
+		tokens:          tokens,
+		shutdownTimeout: DefaultShutdownTimeout,
+		buildQueue: func(options queueOptions) (queueParts, error) {
+			return queueParts{client: client}, nil
+		},
+	})
+
+	require.NoError(t, err)
 }
