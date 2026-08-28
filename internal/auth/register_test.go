@@ -1,4 +1,4 @@
-package auth
+package auth_test
 
 import (
 	"context"
@@ -6,49 +6,33 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/shigabutdinoff/gophermart/internal/auth"
+	authmocks "github.com/shigabutdinoff/gophermart/internal/auth/mocks"
 )
-
-type creatorOnly struct {
-	create func(context.Context, string, string) (User, error)
-}
-
-func (c creatorOnly) Create(ctx context.Context, login, passwordHash string) (User, error) {
-	return c.create(ctx, login, passwordHash)
-}
-
-type hasherOnly struct {
-	hash func(string) (string, error)
-}
-
-func (h hasherOnly) Hash(password string) (string, error) {
-	return h.hash(password)
-}
 
 func TestRegisterServiceUsesNarrowCollaboratorsInHashCreateIssueOrder(t *testing.T) {
 	var calls []string
-	service := NewRegisterService(
-		creatorOnly{create: func(_ context.Context, login, passwordHash string) (User, error) {
-			calls = append(calls, "create")
-			assert.Equal(t, "user", login)
-			assert.Equal(t, "hash", passwordHash)
-			return User{ID: 7}, nil
-		}},
-		hasherOnly{hash: func(password string) (string, error) {
-			calls = append(calls, "hash")
-			assert.Equal(t, "password", password)
-			return "hash", nil
-		}},
-		&fakeTokenIssuer{issueFunc: func(userID int64) (IssuedToken, error) {
-			calls = append(calls, "issue")
-			assert.Equal(t, int64(7), userID)
-			return IssuedToken{Value: "token"}, nil
-		}},
-	)
+	ctx := context.Background()
+	users := authmocks.NewMockUserCreator(t)
+	passwords := authmocks.NewMockPasswordHasher(t)
+	tokens := authmocks.NewMockTokenIssuer(t)
+	passwords.EXPECT().Hash("password").Run(func(string) {
+		calls = append(calls, "hash")
+	}).Return("hash", nil).Once()
+	users.EXPECT().Create(ctx, "user", "hash").Run(func(context.Context, string, string) {
+		calls = append(calls, "create")
+	}).Return(auth.User{ID: 7}, nil).Once()
+	tokens.EXPECT().Issue(int64(7)).Run(func(int64) {
+		calls = append(calls, "issue")
+	}).Return(auth.IssuedToken{Value: "token"}, nil).Once()
+	service := auth.NewRegisterService(users, passwords, tokens)
 
 	token, err := service.Register(
-		context.Background(),
-		Credentials{Login: "user", Password: "password"},
+		ctx,
+		auth.Credentials{Login: "user", Password: "password"},
 	)
 
 	require.NoError(t, err)
@@ -59,126 +43,122 @@ func TestRegisterServiceUsesNarrowCollaboratorsInHashCreateIssueOrder(t *testing
 func TestRegisterServiceHashesEachPasswordBeforeCreatingUser(t *testing.T) {
 	ctx := context.Background()
 	var hashes []string
-	users := &fakeUserRepository{
-		createFunc: func(_ context.Context, login, passwordHash string) (User, error) {
-			assert.Equal(t, "normalized-user", login)
+	users := authmocks.NewMockUserCreator(t)
+	users.EXPECT().Create(ctx, "normalized-user", mock.AnythingOfType("string")).
+		RunAndReturn(func(_ context.Context, _ string, passwordHash string) (auth.User, error) {
 			hashes = append(hashes, passwordHash)
-			return User{ID: int64(len(hashes))}, nil
-		},
-	}
-	issuedTokens := []IssuedToken{{Value: "token-1"}, {Value: "token-2"}}
+			return auth.User{ID: int64(len(hashes))}, nil
+		}).
+		Twice()
+	issuedTokens := []auth.IssuedToken{{Value: "token-1"}, {Value: "token-2"}}
 	var issuedUserIDs []int64
-	issuer := &fakeTokenIssuer{
-		issueFunc: func(userID int64) (IssuedToken, error) {
+	issuer := authmocks.NewMockTokenIssuer(t)
+	issuer.EXPECT().Issue(mock.AnythingOfType("int64")).
+		RunAndReturn(func(userID int64) (auth.IssuedToken, error) {
 			issuedUserIDs = append(issuedUserIDs, userID)
 			return issuedTokens[len(issuedUserIDs)-1], nil
-		},
-	}
-	service := NewRegisterService(users, Argon2Passwords{}, issuer)
-	credentials := Credentials{Login: "normalized-user", Password: "same-password"}
-	var returnedTokens []IssuedToken
+		}).
+		Twice()
+	service := auth.NewRegisterService(users, auth.Argon2Passwords{}, issuer)
+	credentials := auth.Credentials{Login: "normalized-user", Password: "same-password"}
+	var returnedTokens []auth.IssuedToken
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		token, err := service.Register(ctx, credentials)
 		require.NoError(t, err)
 		returnedTokens = append(returnedTokens, token)
 	}
 
-	assert.Equal(t, 2, users.createCalls)
-	assert.Equal(t, 2, issuer.calls)
-	assert.Zero(t, users.findCalls)
-	for i, userID := range issuedUserIDs {
-		assert.Equal(t, int64(i+1), userID)
+	for index, userID := range issuedUserIDs {
+		assert.Equal(t, int64(index+1), userID)
 	}
-	for i, token := range returnedTokens {
-		assert.Equal(t, issuedTokens[i], token)
+	for index, token := range returnedTokens {
+		assert.Equal(t, issuedTokens[index], token)
 	}
 	require.Len(t, hashes, 2)
 	assert.NotEqual(t, credentials.Password, hashes[0])
 	assert.NotEqual(t, credentials.Password, hashes[1])
 	assert.NotEqual(t, hashes[0], hashes[1])
-	passwords := Argon2Passwords{}
+	passwords := auth.Argon2Passwords{}
 	for _, hash := range hashes {
 		assert.NoError(t, passwords.Verify(hash, credentials.Password))
-		assert.ErrorIs(t, passwords.Verify(hash, "wrong-password"), ErrPasswordMismatch)
+		assert.ErrorIs(t, passwords.Verify(hash, "wrong-password"), auth.ErrPasswordMismatch)
 	}
 }
 
 func TestRegisterServiceStopsBeforeIssueWhenLoginTaken(t *testing.T) {
-	users := &fakeUserRepository{
-		createFunc: func(context.Context, string, string) (User, error) {
-			return User{}, ErrLoginTaken
-		},
-	}
-	passwords := &fakePasswords{}
-	issuer := &fakeTokenIssuer{}
-	service := NewRegisterService(users, passwords, issuer)
+	ctx := context.Background()
+	users := authmocks.NewMockUserCreator(t)
+	users.EXPECT().Create(ctx, "user", "hash").Return(auth.User{}, auth.ErrLoginTaken).Once()
+	passwords := authmocks.NewMockPasswordHasher(t)
+	passwords.EXPECT().Hash("password").Return("hash", nil).Once()
+	issuer := authmocks.NewMockTokenIssuer(t)
+	service := auth.NewRegisterService(users, passwords, issuer)
 
-	token, err := service.Register(context.Background(), Credentials{Login: "user", Password: "password"})
-	require.ErrorIs(t, err, ErrLoginTaken)
+	token, err := service.Register(ctx, auth.Credentials{Login: "user", Password: "password"})
+
+	require.ErrorIs(t, err, auth.ErrLoginTaken)
 	assert.Zero(t, token)
-	assert.Equal(t, 1, passwords.hashCalls)
-	assert.Equal(t, 1, users.createCalls)
-	assert.Zero(t, issuer.calls)
-	assert.Zero(t, users.findCalls)
 }
 
 func TestRegisterServiceDoesNotCreateOrIssueWhenHashFails(t *testing.T) {
 	hashErr := errors.New("hash failed")
-	users := &fakeUserRepository{}
-	passwords := &fakePasswords{hashFunc: func(string) (string, error) { return "", hashErr }}
-	issuer := &fakeTokenIssuer{}
-	service := NewRegisterService(users, passwords, issuer)
+	users := authmocks.NewMockUserCreator(t)
+	passwords := authmocks.NewMockPasswordHasher(t)
+	passwords.EXPECT().Hash("password").Return("", hashErr).Once()
+	issuer := authmocks.NewMockTokenIssuer(t)
+	service := auth.NewRegisterService(users, passwords, issuer)
 
-	token, err := service.Register(context.Background(), Credentials{Login: "user", Password: "password"})
+	token, err := service.Register(
+		context.Background(),
+		auth.Credentials{Login: "user", Password: "password"},
+	)
+
 	require.ErrorIs(t, err, hashErr)
 	assert.Zero(t, token)
-	assert.Zero(t, users.createCalls)
-	assert.Zero(t, issuer.calls)
-	assert.Zero(t, users.findCalls)
 }
 
 func TestRegisterServiceDoesNotIssueWhenCreateFails(t *testing.T) {
 	createErr := errors.New("storage failed")
-	users := &fakeUserRepository{
-		createFunc: func(context.Context, string, string) (User, error) { return User{}, createErr },
-	}
-	passwords := &fakePasswords{}
-	issuer := &fakeTokenIssuer{}
-	service := NewRegisterService(users, passwords, issuer)
+	ctx := context.Background()
+	users := authmocks.NewMockUserCreator(t)
+	users.EXPECT().Create(ctx, "user", "hash").Return(auth.User{}, createErr).Once()
+	passwords := authmocks.NewMockPasswordHasher(t)
+	passwords.EXPECT().Hash("password").Return("hash", nil).Once()
+	issuer := authmocks.NewMockTokenIssuer(t)
+	service := auth.NewRegisterService(users, passwords, issuer)
 
-	token, err := service.Register(context.Background(), Credentials{Login: "user", Password: "password"})
+	token, err := service.Register(ctx, auth.Credentials{Login: "user", Password: "password"})
+
 	require.ErrorIs(t, err, createErr)
 	assert.Zero(t, token)
-	assert.Equal(t, 1, users.createCalls)
-	assert.Zero(t, issuer.calls)
-	assert.Zero(t, users.findCalls)
 }
 
 func TestRegisterServiceKeepsCreatedUserWhenIssueFails(t *testing.T) {
 	issueErr := errors.New("issue failed")
 	created := false
-	users := &fakeUserRepository{
-		createFunc: func(_ context.Context, _ string, _ string) (User, error) {
+	users := authmocks.NewMockUserCreator(t)
+	users.EXPECT().Create(mock.Anything, "user", "hash").
+		RunAndReturn(func(context.Context, string, string) (auth.User, error) {
 			if created {
-				return User{}, ErrLoginTaken
+				return auth.User{}, auth.ErrLoginTaken
 			}
 			created = true
-			return User{ID: 42}, nil
-		},
-	}
-	issuer := &fakeTokenIssuer{issueFunc: func(int64) (IssuedToken, error) { return IssuedToken{}, issueErr }}
-	service := NewRegisterService(users, &fakePasswords{}, issuer)
-	credentials := Credentials{Login: "user", Password: "password"}
+			return auth.User{ID: 42}, nil
+		}).
+		Twice()
+	passwords := authmocks.NewMockPasswordHasher(t)
+	passwords.EXPECT().Hash("password").Return("hash", nil).Twice()
+	issuer := authmocks.NewMockTokenIssuer(t)
+	issuer.EXPECT().Issue(int64(42)).Return(auth.IssuedToken{}, issueErr).Once()
+	service := auth.NewRegisterService(users, passwords, issuer)
+	credentials := auth.Credentials{Login: "user", Password: "password"}
 
 	firstToken, err := service.Register(context.Background(), credentials)
 	require.ErrorIs(t, err, issueErr)
 	assert.Zero(t, firstToken)
 	secondToken, err := service.Register(context.Background(), credentials)
-	require.ErrorIs(t, err, ErrLoginTaken)
+	require.ErrorIs(t, err, auth.ErrLoginTaken)
 	assert.Zero(t, secondToken)
-	require.True(t, created)
-	assert.Equal(t, 2, users.createCalls)
-	assert.Equal(t, 1, issuer.calls)
-	assert.Zero(t, users.findCalls)
+	assert.True(t, created)
 }

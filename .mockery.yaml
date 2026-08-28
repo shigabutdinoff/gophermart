@@ -1,0 +1,49 @@
+# Regenerate with: go run github.com/vektra/mockery/v3@v3.7.3
+all: false
+dir: "{{.InterfaceDir}}/mocks"
+filename: mocks.go
+force-file-write: true
+formatter: goimports
+log-level: warn
+pkgname: mocks
+recursive: false
+require-template-schema-exists: false
+structname: "Mock{{.InterfaceName | firstUpper}}"
+template: testify
+packages:
+  github.com/shigabutdinoff/gophermart/internal/order:
+    interfaces:
+      Creator:
+      Lister:
+      ResultWriter:
+  github.com/shigabutdinoff/gophermart/internal/balance:
+    interfaces:
+      Reader:
+      WithdrawalLister:
+      Withdrawer:
+  github.com/shigabutdinoff/gophermart/internal/auth:
+    interfaces:
+      PasswordHasher:
+      PasswordVerifier:
+      TokenIssuer:
+      UserCreator:
+      UserFinder:
+  github.com/shigabutdinoff/gophermart/internal/jobs:
+    interfaces:
+      AccrualClient:
+      Inserter:
+      QueueController:
+      Throttler:
+  github.com/shigabutdinoff/gophermart/internal/server:
+    interfaces:
+      queueThrottle:
+      riverLifecycle:
+      throttleLifecycle:
+  github.com/shigabutdinoff/gophermart/internal/repository/order:
+    interfaces:
+      Pusher:
+        configs:
+          - dir: "{{.InterfaceDir}}"
+            filename: mock_pusher_test.go
+            pkgname: order
+          - {}

@@ -10,16 +10,17 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
+	authmocks "github.com/shigabutdinoff/gophermart/internal/auth/mocks"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
@@ -44,14 +45,23 @@ func TestRegisterConcurrentEquivalentLoginsCreateExactlyOneUser(t *testing.T) {
 		`{"login":" ConcurrentUser ","password":"password"}`,
 		`{"login":"concurrentuser","password":"password"}`,
 	}
-	users := newAcceptanceUserRepository()
+	state := newAcceptanceUserState()
 	createArrived := make(chan struct{}, len(bodies))
 	createRelease := make(chan struct{})
 	releaseCreates := sync.OnceFunc(func() { close(createRelease) })
 	defer releaseCreates()
-	users.createArrived = createArrived
-	users.createRelease = createRelease
-	tokens := &acceptanceTokenIssuer{}
+	state.createArrived = createArrived
+	state.createRelease = createRelease
+	users := authmocks.NewMockUserCreator(t)
+	users.EXPECT().Create(
+		mock.Anything,
+		"concurrentuser",
+		mock.MatchedBy(func(passwordHash string) bool {
+			return passwordHash != "" && passwordHash != "password"
+		}),
+	).RunAndReturn(state.create).Twice()
+	tokens := authmocks.NewMockTokenIssuer(t)
+	tokens.EXPECT().Issue(int64(1)).Return(acceptanceIssuedToken(1), nil).Once()
 	service := auth.NewRegisterService(users, auth.Argon2Passwords{}, tokens)
 	handler := registerHandler(service.Register)
 	responses := make([]*httptest.ResponseRecorder, len(bodies))
@@ -97,29 +107,26 @@ func TestRegisterConcurrentEquivalentLoginsCreateExactlyOneUser(t *testing.T) {
 		assert.Empty(t, response.Header().Values("Set-Cookie"))
 	}
 
-	persisted := users.snapshot()
+	persisted := state.snapshot()
 	require.Len(t, persisted, 1)
 	assert.Equal(t, "concurrentuser", persisted[0].Login)
 	assert.NotEqual(t, "password", persisted[0].PasswordHash)
-	assert.Equal(t, 2, users.createCallsCount())
-	assert.Equal(t, int64(1), tokens.calls.Load())
 }
 
 func TestRegisterFailuresDoNotPersistUserOrReturnToken(t *testing.T) {
 	tests := []struct {
 		name       string
-		passwords  auth.PasswordHasher
+		hashErr    error
 		storageErr error
 		wantCreate int
 	}{
 		{
 			name:       "hash failure",
-			passwords:  acceptancePasswords{hashErr: errors.New("hash failed")},
+			hashErr:    errors.New("hash failed"),
 			wantCreate: 0,
 		},
 		{
 			name:       "storage failure",
-			passwords:  acceptancePasswords{},
 			storageErr: errors.New("insert failed"),
 			wantCreate: 1,
 		},
@@ -127,10 +134,20 @@ func TestRegisterFailuresDoNotPersistUserOrReturnToken(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			users := newAcceptanceUserRepository()
-			users.createErr = test.storageErr
-			tokens := &acceptanceTokenIssuer{}
-			service := auth.NewRegisterService(users, test.passwords, tokens)
+			state := newAcceptanceUserState()
+			state.createErr = test.storageErr
+			users := authmocks.NewMockUserCreator(t)
+			passwords := authmocks.NewMockPasswordHasher(t)
+			if test.hashErr != nil {
+				passwords.EXPECT().Hash("password").Return("", test.hashErr).Once()
+			} else {
+				passwords.EXPECT().Hash("password").Return("password-hash", nil).Once()
+				users.EXPECT().Create(mock.Anything, "user", "password-hash").
+					RunAndReturn(state.create).
+					Once()
+			}
+			tokens := authmocks.NewMockTokenIssuer(t)
+			service := auth.NewRegisterService(users, passwords, tokens)
 			handler := registerHandler(service.Register)
 			request := httptest.NewRequest(
 				http.MethodPost,
@@ -150,102 +167,62 @@ func TestRegisterFailuresDoNotPersistUserOrReturnToken(t *testing.T) {
 			)
 			assert.Empty(t, response.Header().Get("Authorization"))
 			assert.Empty(t, response.Header().Values("Set-Cookie"))
-			assert.Empty(t, users.snapshot())
-			assert.Equal(t, test.wantCreate, users.createCallsCount())
-			assert.Zero(t, tokens.calls.Load())
+			assert.Empty(t, state.snapshot())
+			users.AssertNumberOfCalls(t, "Create", test.wantCreate)
 		})
 	}
 }
 
-type acceptanceUserRepository struct {
+type acceptanceUserState struct {
 	mu            sync.Mutex
 	users         map[string]auth.User
-	createCalls   int
 	createErr     error
 	createArrived chan<- struct{}
 	createRelease <-chan struct{}
 }
 
-func newAcceptanceUserRepository() *acceptanceUserRepository {
-	return &acceptanceUserRepository{users: make(map[string]auth.User)}
+func newAcceptanceUserState() *acceptanceUserState {
+	return &acceptanceUserState{users: make(map[string]auth.User)}
 }
 
-func (r *acceptanceUserRepository) Create(
+func (s *acceptanceUserState) create(
 	_ context.Context,
 	login string,
 	passwordHash string,
 ) (auth.User, error) {
-	if r.createArrived != nil {
-		r.createArrived <- struct{}{}
-		<-r.createRelease
+	if s.createArrived != nil {
+		s.createArrived <- struct{}{}
+		<-s.createRelease
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.createCalls++
-	if r.createErr != nil {
-		return auth.User{}, r.createErr
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.createErr != nil {
+		return auth.User{}, s.createErr
 	}
-	if _, exists := r.users[login]; exists {
+	if _, exists := s.users[login]; exists {
 		return auth.User{}, auth.ErrLoginTaken
 	}
 
 	user := auth.User{
-		ID:           int64(len(r.users) + 1),
+		ID:           int64(len(s.users) + 1),
 		Login:        login,
 		PasswordHash: passwordHash,
 	}
-	r.users[login] = user
+	s.users[login] = user
 	return user, nil
 }
 
-func (r *acceptanceUserRepository) FindByLogin(
-	_ context.Context,
-	login string,
-) (auth.User, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	user, exists := r.users[login]
-	if !exists {
-		return auth.User{}, auth.ErrUserNotFound
-	}
-	return user, nil
+func (s *acceptanceUserState) snapshot() []auth.User {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Collect(maps.Values(s.users))
 }
 
-func (r *acceptanceUserRepository) snapshot() []auth.User {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Collect(maps.Values(r.users))
-}
-
-func (r *acceptanceUserRepository) createCallsCount() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.createCalls
-}
-
-type acceptancePasswords struct {
-	hashErr error
-}
-
-func (p acceptancePasswords) Hash(string) (string, error) {
-	if p.hashErr != nil {
-		return "", p.hashErr
-	}
-	return "password-hash", nil
-}
-
-func (acceptancePasswords) Verify(string, string) error { return nil }
-
-type acceptanceTokenIssuer struct {
-	calls atomic.Int64
-}
-
-func (i *acceptanceTokenIssuer) Issue(userID int64) (auth.IssuedToken, error) {
-	i.calls.Add(1)
+func acceptanceIssuedToken(userID int64) auth.IssuedToken {
 	issuedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	return auth.IssuedToken{
 		Value:     fmt.Sprintf("token-%d", userID),
 		IssuedAt:  issuedAt,
 		ExpiresAt: issuedAt.Add(auth.TokenTTL),
-	}, nil
+	}
 }

@@ -38,6 +38,7 @@ require (
 	github.com/riverqueue/river/riverdriver v0.46.0 // indirect
 	github.com/riverqueue/river/rivershared v0.46.0 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
+	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
