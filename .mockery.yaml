@@ -34,3 +34,6 @@ packages:
     interfaces:
       riverLifecycle:
       throttleLifecycle:
+  github.com/shigabutdinoff/gophermart/internal/handlers/route/healthcheck:
+    interfaces:
+      Pinger:
