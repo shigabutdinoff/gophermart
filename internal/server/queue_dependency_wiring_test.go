@@ -39,6 +39,7 @@ func TestBuildDepsSharesOneOrderRepositoryBetweenHTTPAndWorkers(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	assert.Nil(t, built.pendingOrderResumer)
 	storedOrders, ok := workerOrders.(*orderrepository.Repository)
 	require.True(t, ok)
 	pusher := &testkit.RecordingPusher{}
@@ -96,7 +97,7 @@ func TestBuildDepsBuildsPendingOrderResumerWithQueue(t *testing.T) {
 	tokens, err := auth.NewJWTManager([]byte(testJWTSecret))
 	require.NoError(t, err)
 
-	_, err = buildDeps(depsOptions{
+	built, err := buildDeps(depsOptions{
 		logger:          zap.NewNop(),
 		queue:           newTestConfig().Queue,
 		accrualAddress:  testAccrualAddress,
@@ -110,4 +111,5 @@ func TestBuildDepsBuildsPendingOrderResumerWithQueue(t *testing.T) {
 	})
 
 	require.NoError(t, err)
+	assert.NotNil(t, built.pendingOrderResumer)
 }

@@ -32,6 +32,7 @@ packages:
   github.com/shigabutdinoff/gophermart/internal/jobs:
     interfaces:
       AccrualClient:
+      Inserter:
       QueueController:
       Throttler:
   github.com/shigabutdinoff/gophermart/internal/server:

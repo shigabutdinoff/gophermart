@@ -10,7 +10,10 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	jobsmocks "github.com/shigabutdinoff/gophermart/internal/jobs/mocks"
 )
 
 // fakeInserter заменяет сгенерённый мок: разбирая аргументы, testify читает
@@ -55,11 +58,11 @@ func (f *fakeInserter) Insert(
 
 func newMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
-	sqlDB, sqlMock, err := sqlmock.New()
+	sqlDB, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	return sqlDB, sqlMock
+	return sqlDB, mock
 }
 
 func TestCheckAccrualArgs_NamesJobInQueue(t *testing.T) {
@@ -113,4 +116,39 @@ func TestDispatcher_KeepsQueueError(t *testing.T) {
 	assert.ErrorContains(t, pushErr, "dispatch check_accrual")
 	require.NoError(t, tx.Rollback())
 	require.NoError(t, sqlMock.ExpectationsWereMet())
+}
+
+func TestDispatcher_ResumeStopsAfterFirstInsertError(t *testing.T) {
+	queueErr := errors.New("queue")
+	queue := jobsmocks.NewMockInserter(t)
+	ctx := context.Background()
+	first := queue.EXPECT().Insert(
+		ctx,
+		CheckAccrualArgs{Number: "12345678903"},
+		expectedInsertOptions(),
+	).Return(&rivertype.JobInsertResult{}, nil).Once()
+	second := queue.EXPECT().Insert(
+		ctx,
+		CheckAccrualArgs{Number: "12345678904"},
+		expectedInsertOptions(),
+	).Return(nil, queueErr).Once()
+	mock.InOrder(first, second)
+
+	inserted, err := NewDispatcher(queue, "orders").Resume(
+		ctx,
+		[]string{"12345678903", "12345678904", "12345678905"},
+	)
+
+	assert.Equal(t, 1, inserted)
+	require.ErrorIs(t, err, queueErr)
+	assert.ErrorContains(t, err, "dispatch check_accrual")
+}
+
+func TestDispatcher_ResumeDoesNotCallQueueForNoOrders(t *testing.T) {
+	queue := jobsmocks.NewMockInserter(t)
+
+	inserted, err := NewDispatcher(queue, "orders").Resume(context.Background(), nil)
+
+	require.NoError(t, err)
+	assert.Zero(t, inserted)
 }
