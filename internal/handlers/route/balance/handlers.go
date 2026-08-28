@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/zap"
@@ -19,6 +20,8 @@ import (
 const balancePath = "/api/user/balance"
 
 const withdrawPath = "/api/user/balance/withdraw"
+
+const withdrawalsPath = "/api/user/withdrawals"
 
 const (
 	messageInvalidOrder      = "Неверный номер заказа"
@@ -37,10 +40,14 @@ type WithdrawFunc func(
 	userID int64,
 ) error
 
+// ListFunc отдаёт историю списаний пользователя.
+type ListFunc func(ctx context.Context, userID int64) ([]domain.Withdrawal, error)
+
 // Deps задаёт зависимости маршрутов счёта.
 type Deps struct {
 	Read     ReadFunc
 	Withdraw WithdrawFunc
+	List     ListFunc
 }
 
 // Options задаёт параметры публикации маршрута баланса.
@@ -76,10 +83,17 @@ type withdrawInput struct {
 
 type withdrawOutput struct{}
 
+type withdrawalView struct {
+	Order       string       `json:"order"`
+	Sum         money.Points `json:"sum"`
+	ProcessedAt time.Time    `json:"processed_at"`
+}
+
 // RegisterRoutes публикует операции счёта.
 func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps, options Options) {
 	registerBalanceRoute(api, logger, deps.Read, options)
 	registerWithdrawRoute(api, logger, deps.Withdraw, options)
+	registerWithdrawalsRoute(api, logger, deps.List, options)
 }
 
 func registerBalanceRoute(
@@ -158,4 +172,54 @@ func registerWithdrawRoute(
 			return nil, route.InternalError(logger, "Не удалось списать баллы", err)
 		}
 	})
+}
+
+func registerWithdrawalsRoute(
+	api huma.API,
+	logger *zap.Logger,
+	list ListFunc,
+	options Options,
+) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "list-withdrawals",
+		Method:        http.MethodGet,
+		Path:          withdrawalsPath,
+		Summary:       "Получение истории списаний пользователя",
+		DefaultStatus: http.StatusOK,
+		Middlewares:   options.Middlewares,
+		Errors: []int{
+			http.StatusUnauthorized,
+			http.StatusInternalServerError,
+		},
+	}, func(ctx context.Context, _ *struct{}) (*route.JSONList, error) {
+		userID, err := authorization.RequireUserID(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		withdrawals, err := list(ctx, userID)
+		if err != nil {
+			return nil, route.InternalError(logger, "Не удалось получить историю списаний", err)
+		}
+
+		response, err := route.JSONOrNoContent(withdrawalViews(withdrawals))
+		if err != nil {
+			return nil, route.InternalError(logger, "Не удалось собрать историю списаний", err)
+		}
+
+		return response, nil
+	})
+}
+
+func withdrawalViews(withdrawals []domain.Withdrawal) []withdrawalView {
+	views := make([]withdrawalView, len(withdrawals))
+	for i, withdrawal := range withdrawals {
+		views[i] = withdrawalView{
+			Order:       withdrawal.Order,
+			Sum:         withdrawal.Sum,
+			ProcessedAt: withdrawal.ProcessedAt,
+		}
+	}
+
+	return views
 }

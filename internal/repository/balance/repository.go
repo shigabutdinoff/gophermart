@@ -3,6 +3,7 @@ package balance
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -33,8 +34,18 @@ type balanceRow struct {
 	Withdrawn money.Points `gorm:"column:withdrawn"`
 }
 
+type withdrawalRow struct {
+	Order       string       `gorm:"column:order_number"`
+	Sum         money.Points `gorm:"column:sum"`
+	ProcessedAt time.Time    `gorm:"column:processed_at"`
+}
+
 func (r balanceRow) balance() domain.Balance {
 	return domain.Balance{Current: r.Current, Withdrawn: r.Withdrawn}
+}
+
+func (r withdrawalRow) withdrawal() domain.Withdrawal {
+	return domain.Withdrawal{Order: r.Order, Sum: r.Sum, ProcessedAt: r.ProcessedAt}
 }
 
 // Repository считает счёт по сохранённым заказам и списаниям.
@@ -63,6 +74,30 @@ func (r *Repository) Balance(ctx context.Context, userID int64) (domain.Balance,
 	}
 
 	return row.balance(), nil
+}
+
+// ListWithdrawals отдаёт историю списаний пользователя от новых к старым.
+func (r *Repository) ListWithdrawals(ctx context.Context, userID int64) ([]domain.Withdrawal, error) {
+	db, err := r.session.WithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []withdrawalRow
+	if err := db.Table("withdrawals").
+		Select("order_number, sum, processed_at").
+		Where("user_id = ?", userID).
+		Order("processed_at DESC, id DESC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	withdrawals := make([]domain.Withdrawal, len(rows))
+	for i, row := range rows {
+		withdrawals[i] = row.withdrawal()
+	}
+
+	return withdrawals, nil
 }
 
 // Withdraw записывает списание, если вычисленного остатка достаточно.

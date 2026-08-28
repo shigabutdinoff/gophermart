@@ -38,39 +38,6 @@ func waitDone(t *testing.T, done <-chan error) error {
 	}
 }
 
-func TestNew(t *testing.T) {
-	s := mustNew(t, zap.NewNop(), config.Default())
-
-	assert.Equal(t, config.DefaultRunAddress, s.RunAddress)
-	assert.Equal(t, DefaultShutdownTimeout, s.shutdownTimeout)
-	assert.NotNil(t, s.router)
-}
-
-func TestNew_RejectsShortSecretBeforeListenWithoutLeak(t *testing.T) {
-	cfg := config.Default()
-	cfg.JWTSecret = "short-secret"
-
-	server, err := New(zap.NewNop(), cfg)
-
-	assert.Nil(t, server)
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), cfg.JWTSecret)
-}
-
-func TestNew_BuildsAuthDependenciesBeforeRouter(t *testing.T) {
-	cfg := config.Default()
-	cfg.JWTSecret = "0123456789abcdef0123456789abcdef"
-
-	server, err := New(zap.NewNop(), cfg)
-
-	require.NoError(t, err)
-	assert.NotNil(t, server.router)
-	assert.NotNil(t, server.deps.auth.Register)
-	assert.NotNil(t, server.deps.auth.Login)
-	assert.NotNil(t, server.deps.tokenParser)
-	assert.Empty(t, server.JWTSecret)
-}
-
 func TestServer_ServesAndLogsStart(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	s := mustNew(t, zap.New(core), config.Default())

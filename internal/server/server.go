@@ -153,6 +153,7 @@ func buildBalanceDeps(storedBalance *balancerepository.Repository) balanceroute.
 	return balanceroute.Deps{
 		Read:     balance.NewReadService(storedBalance).Read,
 		Withdraw: balance.NewWithdrawService(storedBalance).Withdraw,
+		List:     balance.NewListService(storedBalance).List,
 	}
 }
 
