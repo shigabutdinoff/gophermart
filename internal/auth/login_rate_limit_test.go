@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -145,4 +148,59 @@ func TestLoginServiceInternalErrorsDoNotConsumeAttempts(t *testing.T) {
 			assert.False(t, limited)
 		})
 	}
+}
+
+// Шестая одновременная попытка того же ключа не доходит до репозитория.
+func TestLoginServiceConcurrentSixthSameKeyStopsBeforeRepository(t *testing.T) {
+	t.Parallel()
+
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var findCalls atomic.Int64
+	collaborators := newLoginCollaborators(t)
+	collaborators.users.EXPECT().FindByLogin(mock.Anything, "user").
+		RunAndReturn(func(context.Context, string) (auth.User, error) {
+			if findCalls.Add(1) == 1 {
+				close(firstEntered)
+				<-releaseFirst
+			}
+
+			return auth.User{}, auth.ErrUserNotFound
+		}).
+		Times(auth.MaxLoginAttempts)
+	collaborators.passwords.EXPECT().Verify(testDummyHash, "password").
+		Return(auth.ErrPasswordMismatch).Times(auth.MaxLoginAttempts)
+	service := collaborators.serviceWithLimiter(auth.NewLoginLimiter())
+	start := make(chan struct{})
+	errs := make(chan error, auth.MaxLoginAttempts+1)
+	var wait sync.WaitGroup
+
+	for range auth.MaxLoginAttempts + 1 {
+		wait.Go(func() {
+			<-start
+			_, err := loginAttempt(service)
+			errs <- err
+		})
+	}
+	close(start)
+	<-firstEntered
+	time.Sleep(25 * time.Millisecond)
+	assert.Equal(t, int64(1), findCalls.Load(), "проверки одного ключа идут по очереди")
+	close(releaseFirst)
+	wait.Wait()
+	close(errs)
+
+	invalid, limited := 0, 0
+	for err := range errs {
+		switch {
+		case errors.Is(err, auth.ErrInvalidCredentials):
+			invalid++
+		case errors.Is(err, auth.ErrRateLimited):
+			limited++
+		default:
+			require.NoError(t, err)
+		}
+	}
+	assert.Equal(t, auth.MaxLoginAttempts, invalid)
+	assert.Equal(t, 1, limited)
 }
