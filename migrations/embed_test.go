@@ -56,7 +56,8 @@ func TestFSContainsWithdrawalsMigration(t *testing.T) {
 	assert.Contains(t, sql, "user_id BIGINT NOT NULL REFERENCES users (id)")
 	assert.Contains(t, sql, "CONSTRAINT withdrawals_sum_positive CHECK (sum > 0)")
 	assert.Contains(t, sql, "CONSTRAINT withdrawals_order_number_key UNIQUE (order_number)")
-	assert.NotContains(t, sql, "CREATE INDEX")
+	assert.Contains(t, sql, "CREATE INDEX withdrawals_user_processed_idx")
+	assert.Contains(t, sql, "ON withdrawals (user_id, processed_at DESC, id DESC)")
 	assert.Contains(t, sql, "COMMENT ON COLUMN withdrawals.sum IS 'Списанные баллы в копейках';")
 
 	up, down, found := strings.Cut(sql, "-- +goose Down")
@@ -66,6 +67,23 @@ func TestFSContainsWithdrawalsMigration(t *testing.T) {
 	assert.Contains(t, down, "DROP TABLE IF EXISTS withdrawals;")
 	assert.NotContains(t, down, "orders_user_processed_idx")
 	assert.NotContains(t, down, "withdrawals_user_processed_idx")
+}
+
+func TestFSContainsConcurrentOrdersUserProcessedIndexMigration(t *testing.T) {
+	sql := readMigrationSQL(t, "00005_create_orders_user_processed_index.sql")
+
+	firstLine, _, found := strings.Cut(sql, "\n")
+	require.True(t, found)
+	assert.Equal(t, "-- +goose NO TRANSACTION", firstLine)
+	assert.NotContains(t, sql, "-- +goose StatementBegin")
+
+	up, down, found := strings.Cut(sql, "-- +goose Down")
+	require.True(t, found)
+	assert.Contains(t, up, "-- +goose Up")
+	assert.Contains(t, up, "CREATE INDEX CONCURRENTLY orders_user_processed_idx ON orders (user_id) WHERE status = 'PROCESSED';")
+	assert.NotContains(t, up, "DROP INDEX")
+	assert.Contains(t, down, "DROP INDEX CONCURRENTLY IF EXISTS orders_user_processed_idx;")
+	assert.NotContains(t, down, "CREATE INDEX")
 }
 
 func TestFSHasNoLegacyMigrationFiles(t *testing.T) {
@@ -81,6 +99,7 @@ func TestFSHasNoLegacyMigrationFiles(t *testing.T) {
 		"00002_create_orders.sql",
 		"00003_add_order_accrual.sql",
 		"00004_create_withdrawals.sql",
+		"00005_create_orders_user_processed_index.sql",
 	}, names)
 }
 

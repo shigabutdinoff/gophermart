@@ -8,6 +8,9 @@ CREATE TABLE withdrawals (
     CONSTRAINT withdrawals_order_number_key UNIQUE (order_number)
 );
 
+CREATE INDEX withdrawals_user_processed_idx
+    ON withdrawals (user_id, processed_at DESC, id DESC);
+
 COMMENT ON COLUMN withdrawals.sum IS 'Списанные баллы в копейках';
 
 -- +goose Down
