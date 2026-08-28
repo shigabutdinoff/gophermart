@@ -2,6 +2,7 @@ package balance
 
 import (
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -16,6 +17,16 @@ const balanceExpression = `
 COALESCE(SUM(accrual) FILTER (WHERE status = 'PROCESSED'), 0)
     - (SELECT COALESCE(SUM(sum), 0) FROM withdrawals WHERE user_id = ?) AS current,
 (SELECT COALESCE(SUM(sum), 0) FROM withdrawals WHERE user_id = ?) AS withdrawn`
+
+const withdrawSQL = `
+INSERT INTO withdrawals (user_id, order_number, sum)
+SELECT ?, ?, ?
+WHERE (
+    SELECT COALESCE(SUM(accrual) FILTER (WHERE status = 'PROCESSED'), 0)
+      FROM orders WHERE user_id = ?
+) - (
+    SELECT COALESCE(SUM(sum), 0) FROM withdrawals WHERE user_id = ?
+) >= ?`
 
 type balanceRow struct {
 	Current   money.Points `gorm:"column:current"`
@@ -52,4 +63,27 @@ func (r *Repository) Balance(ctx context.Context, userID int64) (domain.Balance,
 	}
 
 	return row.balance(), nil
+}
+
+// Withdraw записывает списание, если вычисленного остатка достаточно.
+func (r *Repository) Withdraw(
+	ctx context.Context,
+	userID int64,
+	number string,
+	sum money.Points,
+) (domain.WithdrawOutcome, error) {
+	db, err := r.session.WithContext(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	insert := db.Exec(withdrawSQL, userID, number, sum, userID, userID, sum)
+	if insert.Error != nil {
+		return 0, fmt.Errorf("insert withdrawal: %w", insert.Error)
+	}
+	if insert.RowsAffected == 0 {
+		return domain.NotEnoughFunds, nil
+	}
+
+	return domain.Withdrawn, nil
 }

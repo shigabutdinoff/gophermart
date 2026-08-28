@@ -151,7 +151,8 @@ func buildDeps(options depsOptions) (deps, error) {
 
 func buildBalanceDeps(storedBalance *balancerepository.Repository) balanceroute.Deps {
 	return balanceroute.Deps{
-		Read: balance.NewReadService(storedBalance).Read,
+		Read:     balance.NewReadService(storedBalance).Read,
+		Withdraw: balance.NewWithdrawService(storedBalance).Withdraw,
 	}
 }
 

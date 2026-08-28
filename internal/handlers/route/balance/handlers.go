@@ -2,25 +2,45 @@ package balance
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/zap"
 
 	domain "github.com/shigabutdinoff/gophermart/internal/balance"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
 	"github.com/shigabutdinoff/gophermart/internal/money"
+	"github.com/shigabutdinoff/gophermart/internal/ordernumber"
 )
 
 const balancePath = "/api/user/balance"
 
+const withdrawPath = "/api/user/balance/withdraw"
+
+const (
+	messageInvalidOrder      = "Неверный номер заказа"
+	messageNonPositiveSum    = "Сумма списания должна быть положительной"
+	messageInsufficientFunds = "Недостаточно средств"
+)
+
 // ReadFunc отдаёт состояние счёта пользователя.
 type ReadFunc func(ctx context.Context, userID int64) (domain.Balance, error)
 
-// Deps задаёт зависимость маршрута чтения баланса.
+// WithdrawFunc списывает сумму по номеру гипотетического заказа.
+type WithdrawFunc func(
+	ctx context.Context,
+	number string,
+	sum money.Points,
+	userID int64,
+) error
+
+// Deps задаёт зависимости маршрутов счёта.
 type Deps struct {
-	Read ReadFunc
+	Read     ReadFunc
+	Withdraw WithdrawFunc
 }
 
 // Options задаёт параметры публикации маршрута баланса.
@@ -35,8 +55,39 @@ type balanceOutput struct {
 	Body balanceView
 }
 
-// RegisterRoutes публикует чтение баланса как huma-операцию.
+type withdrawPoints money.Points
+
+func (withdrawPoints) Schema(huma.Registry) *huma.Schema {
+	return &huma.Schema{Type: huma.TypeNumber}
+}
+
+func (p *withdrawPoints) UnmarshalJSON(data []byte) error {
+	return (*money.Points)(p).UnmarshalJSON(data)
+}
+
+type withdrawBody struct {
+	Order string         `json:"order" required:"false"`
+	Sum   withdrawPoints `json:"sum"`
+}
+
+type withdrawInput struct {
+	Body withdrawBody
+}
+
+type withdrawOutput struct{}
+
+// RegisterRoutes публикует операции счёта.
 func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps, options Options) {
+	registerBalanceRoute(api, logger, deps.Read, options)
+	registerWithdrawRoute(api, logger, deps.Withdraw, options)
+}
+
+func registerBalanceRoute(
+	api huma.API,
+	logger *zap.Logger,
+	read ReadFunc,
+	options Options,
+) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "get-balance",
 		Method:        http.MethodGet,
@@ -54,7 +105,7 @@ func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps, options Options
 			return nil, err
 		}
 
-		account, err := deps.Read(ctx, userID)
+		account, err := read(ctx, userID)
 		if err != nil {
 			return nil, route.InternalError(logger, "Не удалось получить баланс", err)
 		}
@@ -63,5 +114,48 @@ func RegisterRoutes(api huma.API, logger *zap.Logger, deps Deps, options Options
 			Current:   account.Current,
 			Withdrawn: account.Withdrawn,
 		}}, nil
+	})
+}
+
+func registerWithdrawRoute(
+	api huma.API,
+	logger *zap.Logger,
+	withdraw WithdrawFunc,
+	options Options,
+) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "withdraw-balance",
+		Method:        http.MethodPost,
+		Path:          withdrawPath,
+		Summary:       "Списание баллов в счёт оплаты заказа",
+		Metadata:      apiconfig.ValidationErrorsAsBadRequest(),
+		DefaultStatus: http.StatusOK,
+		Middlewares:   options.Middlewares,
+		Errors: []int{
+			http.StatusBadRequest,
+			http.StatusUnauthorized,
+			http.StatusPaymentRequired,
+			http.StatusUnprocessableEntity,
+			http.StatusInternalServerError,
+		},
+	}, func(ctx context.Context, in *withdrawInput) (*withdrawOutput, error) {
+		userID, err := authorization.RequireUserID(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		err = withdraw(ctx, in.Body.Order, money.Points(in.Body.Sum), userID)
+		switch {
+		case err == nil:
+			return &withdrawOutput{}, nil
+		case errors.Is(err, ordernumber.ErrEmpty), errors.Is(err, ordernumber.ErrInvalid):
+			return nil, huma.Error422UnprocessableEntity(messageInvalidOrder)
+		case errors.Is(err, domain.ErrNonPositiveSum):
+			return nil, huma.Error400BadRequest(messageNonPositiveSum)
+		case errors.Is(err, domain.ErrInsufficientFunds):
+			return nil, huma.Error402PaymentRequired(messageInsufficientFunds)
+		default:
+			return nil, route.InternalError(logger, "Не удалось списать баллы", err)
+		}
 	})
 }

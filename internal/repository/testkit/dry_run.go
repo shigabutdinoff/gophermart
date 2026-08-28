@@ -15,6 +15,7 @@ const dryRunDSN = "postgres://gophermart:password@127.0.0.1:1/gophermart?sslmode
 
 const (
 	createResultKey = "testkit:dry-run-create-result"
+	execResultKey   = "testkit:dry-run-exec-result"
 	queryResultKey  = "testkit:dry-run-query-result"
 )
 
@@ -23,6 +24,7 @@ type TransactionState struct {
 	Begun      int
 	Committed  int
 	RolledBack int
+	Isolation  sql.IsolationLevel
 }
 
 type dryRunConnPool struct {
@@ -30,8 +32,14 @@ type dryRunConnPool struct {
 	state *TransactionState
 }
 
-func (p *dryRunConnPool) BeginTx(context.Context, *sql.TxOptions) (gorm.ConnPool, error) {
+func (p *dryRunConnPool) BeginTx(
+	_ context.Context,
+	options *sql.TxOptions,
+) (gorm.ConnPool, error) {
 	p.state.Begun++
+	if options != nil {
+		p.state.Isolation = options.Isolation
+	}
 
 	return &dryRunTransaction{ConnPool: p.ConnPool, state: p.state}, nil
 }
@@ -54,6 +62,11 @@ func (tx *dryRunTransaction) Rollback() error {
 }
 
 type createResult struct {
+	rowsAffected int64
+	err          error
+}
+
+type execResult struct {
 	rowsAffected int64
 	err          error
 }
@@ -104,6 +117,20 @@ func NewDryRunDB(t testing.TB) *gorm.DB {
 			tx.RowsAffected = result.rowsAffected
 		},
 	))
+	requireCallback(t, gormDB.Callback().Raw().After("gorm:raw").Register(
+		execResultKey,
+		func(tx *gorm.DB) {
+			configured, ok := tx.Get(execResultKey)
+			if !ok {
+				return
+			}
+			result := configured.(execResult)
+			tx.RowsAffected = result.rowsAffected
+			if result.err != nil {
+				tx.AddError(result.err)
+			}
+		},
+	))
 	requireCallback(t, gormDB.Callback().Query().After("gorm:query").Register(
 		queryResultKey,
 		func(tx *gorm.DB) {
@@ -140,6 +167,12 @@ func TransactionStateOf(t testing.TB, db *gorm.DB) TransactionState {
 func SetCreateResult(t testing.TB, db *gorm.DB, rowsAffected int64, err error) {
 	t.Helper()
 	db.Statement.Settings.Store(createResultKey, createResult{rowsAffected: rowsAffected, err: err})
+}
+
+// SetExecResult задаёт результат сырой записи для DryRun-фикстуры.
+func SetExecResult(t testing.TB, db *gorm.DB, rowsAffected int64, err error) {
+	t.Helper()
+	db.Statement.Settings.Store(execResultKey, execResult{rowsAffected: rowsAffected, err: err})
 }
 
 // SetQueryResult задаёт строки и ошибку чтения для DryRun-фикстуры.
