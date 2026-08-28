@@ -28,6 +28,8 @@ func TestServer_InterruptCancelsBlockedRunnerStartAndClosesDatabase(t *testing.T
 		router:          chi.NewRouter(),
 		logger:          zap.NewNop(),
 		shutdownTimeout: time.Second,
+		retryDelay:      time.Nanosecond,
+		migrateDatabase: successfulTestMigration,
 		sqlDB:           sqlDB,
 		deps: deps{
 			runner: newMockedShutdownRunner(t, lifecycle, &shutdownThrottleLifecycle{}),
@@ -78,6 +80,8 @@ func TestServer_StartupResumeFailureCleansThrottleBeforeDatabaseClose(t *testing
 		router:          chi.NewRouter(),
 		logger:          zap.NewNop(),
 		shutdownTimeout: shutdownTimeout,
+		retryDelay:      time.Nanosecond,
+		migrateDatabase: successfulTestMigration,
 		sqlDB:           sqlDB,
 		deps: deps{
 			runner: newMockedShutdownRunner(t, lifecycle, throttle),

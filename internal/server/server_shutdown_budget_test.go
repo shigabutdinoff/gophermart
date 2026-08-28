@@ -73,6 +73,8 @@ func TestServer_ShutdownUsesOneAbsoluteDeadlineAndClosesDatabaseLast(t *testing.
 		router:          router,
 		logger:          zap.NewNop(),
 		shutdownTimeout: shutdownTimeout,
+		retryDelay:      time.Millisecond,
+		migrateDatabase: successfulTestMigration,
 		sqlDB:           sqlDB,
 		deps: deps{
 			runner: newMockedShutdownRunner(t, lifecycle, throttle),

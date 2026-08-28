@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -34,6 +36,10 @@ func mustNew(t *testing.T, logger *zap.Logger, cfg config.Config, options ...Opt
 	server, err := New(logger, cfg, options...)
 	require.NoError(t, err)
 	return server
+}
+
+func successfulTestMigration(context.Context, *sql.DB) error {
+	return nil
 }
 
 // notify отправляет сигнал, не блокируя отправителя на полном канале.
