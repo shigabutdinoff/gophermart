@@ -94,7 +94,9 @@ func TestWithdrawMapsStorageOutcomes(t *testing.T) {
 		want    error
 	}{
 		{name: "withdrawn", outcome: Withdrawn},
+		{name: "same order repeated", outcome: AlreadyWithdrawn},
 		{name: "not enough funds", outcome: NotEnoughFunds, want: ErrInsufficientFunds},
+		{name: "order taken", outcome: TakenByAnother, want: ErrOrderTaken},
 	}
 
 	for _, test := range tests {

@@ -92,6 +92,7 @@ func TestWithdrawAnswersExpectedDomainFailuresWithoutLogging(t *testing.T) {
 		wantStatus  int
 	}{
 		{name: "not enough funds", withdrawErr: domain.ErrInsufficientFunds, wantStatus: http.StatusPaymentRequired},
+		{name: "order taken", withdrawErr: domain.ErrOrderTaken, wantStatus: http.StatusConflict},
 		{name: "empty order", withdrawErr: ordernumber.ErrEmpty, wantStatus: http.StatusUnprocessableEntity},
 		{name: "invalid order", withdrawErr: ordernumber.ErrInvalid, wantStatus: http.StatusUnprocessableEntity},
 		{name: "nonpositive sum", withdrawErr: domain.ErrNonPositiveSum, wantStatus: http.StatusBadRequest},
