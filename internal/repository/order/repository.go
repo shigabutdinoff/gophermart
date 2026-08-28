@@ -204,3 +204,21 @@ func (r *Repository) ListByUser(ctx context.Context, userID int64) ([]domain.Ord
 
 	return orders, nil
 }
+
+// ListUnfinished отдаёт номера заказов, ещё не дошедших до финального статуса.
+func (r *Repository) ListUnfinished(ctx context.Context) ([]string, error) {
+	db, err := r.session.WithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var numbers []string
+	if err := db.Table(ordersTable).
+		Select("number").
+		Where("status NOT IN ?", domain.FinalStatuses()).
+		Find(&numbers).Error; err != nil {
+		return nil, err
+	}
+
+	return numbers, nil
+}

@@ -83,3 +83,8 @@ type ResultWriter interface {
 type Lister interface {
 	ListByUser(ctx context.Context, userID int64) ([]Order, error)
 }
+
+// PendingLister отдаёт номера заказов, которые ещё нужно опрашивать.
+type PendingLister interface {
+	ListUnfinished(ctx context.Context) ([]string, error)
+}

@@ -59,11 +59,17 @@ type Server struct {
 
 // deps собирает всё, что сервер отдаёт маршрутам и фоновым задачам.
 type deps struct {
-	auth        authentication.Deps
-	balance     balanceroute.Deps
-	orders      ordersroute.Deps
-	tokenParser authorization.TokenParser
-	runner      *riverRunner
+	auth                authentication.Deps
+	balance             balanceroute.Deps
+	orders              ordersroute.Deps
+	tokenParser         authorization.TokenParser
+	pendingOrderResumer pendingOrderResumer
+	runner              *riverRunner
+}
+
+// pendingOrderResumer возвращает незавершённые заказы в очередь опроса.
+type pendingOrderResumer interface {
+	Resume(context.Context) (int, error)
 }
 
 // New создаёт сервер с переданной конфигурацией.
@@ -159,19 +165,22 @@ func buildDeps(options depsOptions) (deps, error) {
 	if err != nil {
 		return deps{}, err
 	}
+	var pendingResumer pendingOrderResumer
 	if queue.client != nil {
 		dispatcher := jobs.NewDispatcher(queue.client, options.queue.Name)
 		if err := storedOrders.AttachPusher(dispatcher); err != nil {
 			return deps{}, fmt.Errorf("attach order job pusher: %w", err)
 		}
+		pendingResumer = jobs.NewPendingOrderResumer(storedOrders, dispatcher)
 	}
 
 	return deps{
-		auth:        authDeps,
-		balance:     buildBalanceDeps(storedBalance),
-		orders:      buildOrderDeps(storedOrders),
-		tokenParser: options.tokens.ParseRequest,
-		runner:      queue.runner,
+		auth:                authDeps,
+		balance:             buildBalanceDeps(storedBalance),
+		orders:              buildOrderDeps(storedOrders),
+		tokenParser:         options.tokens.ParseRequest,
+		pendingOrderResumer: pendingResumer,
+		runner:              queue.runner,
 	}, nil
 }
 

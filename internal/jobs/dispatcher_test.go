@@ -40,6 +40,19 @@ func (f *fakeInserter) InsertTx(
 	return f.result, f.err
 }
 
+func (f *fakeInserter) Insert(
+	ctx context.Context,
+	args river.JobArgs,
+	opts *river.InsertOpts,
+) (*rivertype.JobInsertResult, error) {
+	f.calls++
+	f.ctx = ctx
+	f.args = args
+	f.opts = opts
+
+	return f.result, f.err
+}
+
 func newMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
 	sqlDB, sqlMock, err := sqlmock.New()

@@ -17,8 +17,14 @@ type CheckAccrualArgs struct {
 // Kind называет задание в таблице очереди.
 func (CheckAccrualArgs) Kind() string { return "check_accrual" }
 
-// Inserter ставит задание в переданную транзакцию.
+// Inserter ставит задание сразу или в переданную транзакцию.
 type Inserter interface {
+	Insert(
+		ctx context.Context,
+		args river.JobArgs,
+		opts *river.InsertOpts,
+	) (*rivertype.JobInsertResult, error)
+
 	InsertTx(
 		ctx context.Context,
 		tx *sql.Tx,
@@ -53,4 +59,21 @@ func (d *Dispatcher) Push(ctx context.Context, tx *sql.Tx, number string) error 
 	}
 
 	return nil
+}
+
+// Resume возвращает незавершённые заказы к опросу без повторной постановки
+// одинаковых заданий.
+func (d *Dispatcher) Resume(ctx context.Context, numbers []string) (int, error) {
+	inserted := 0
+	for _, number := range numbers {
+		result, err := d.queue.Insert(ctx, CheckAccrualArgs{Number: number}, d.insertOptions())
+		if err != nil {
+			return inserted, fmt.Errorf("dispatch %s: %w", CheckAccrualArgs{}.Kind(), err)
+		}
+		if !result.UniqueSkippedAsDuplicate {
+			inserted++
+		}
+	}
+
+	return inserted, nil
 }

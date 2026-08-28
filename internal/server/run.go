@@ -12,15 +12,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// retryMaxDelay ограничивает рост паузы между попытками восстановиться
 const retryMaxDelay = 30 * time.Second
-
-func (s *Server) retryForeverOptions(ctx context.Context, onRetry retry.OnRetryFunc) []retry.Option {
-	return []retry.Option{
-		retry.Context(ctx), retry.Attempts(0), retry.Delay(s.retryDelay),
-		retry.DelayType(retry.BackOffDelay), retry.MaxDelay(retryMaxDelay),
-		retry.LastErrorOnly(true), retry.OnRetry(onRetry),
-	}
-}
 
 // Run работает до отмены контекста, затем останавливается за shutdownTimeout.
 func (s *Server) Run(ctx context.Context) error {
@@ -46,6 +39,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// пишется и читается в горутине, вызвавшей Run, гонки здесь нет
 	var shutdownErr error
+
 	budget := newShutdownBudget(s.shutdownTimeout)
 	defer budget.release()
 
@@ -90,43 +84,62 @@ func (s *Server) Run(ctx context.Context) error {
 	return err
 }
 
-// queueActor запускает очередь один раз и держит её в группе до остановки.
-// Ошибка очереди не останавливает HTTP-сервис.
-func (s *Server) queueActor(ctx context.Context, readyChannels ...<-chan struct{}) (func() error, func(error)) {
-	interrupted := make(chan struct{})
-	startCtx, cancelStart := context.WithCancel(context.WithoutCancel(ctx))
-	var interruptOnce sync.Once
-	readyDefault := make(chan struct{})
-	close(readyDefault)
-	var ready <-chan struct{} = readyDefault
-	if len(readyChannels) != 0 {
-		ready = readyChannels[0]
+// stopQueue сворачивает очередь в остатке единого срока остановки.
+func (s *Server) stopQueue(ctx context.Context) {
+	if s.deps.runner == nil {
+		return
 	}
 
+	if err := s.deps.runner.Stop(ctx); err != nil {
+		s.logger.Error("Не удалось остановить очередь заданий", zap.Error(err))
+	}
+}
+
+// queueActor держит очередь заданий поднятой, пока её не остановят.
+// Сервис работает и без опроса расчёта, поэтому отказ очереди его не роняет.
+func (s *Server) queueActor(
+	ctx context.Context,
+	ready <-chan struct{},
+) (func() error, func(error)) {
+	interrupted := make(chan struct{})
+	retryCtx, cancelRetry := context.WithCancel(context.WithoutCancel(ctx))
+	var interruptOnce sync.Once
+
 	return func() error {
+			defer cancelRetry()
+
 			select {
 			case <-ready:
 			case <-interrupted:
 				return nil
 			}
-			s.keepQueueRunning(startCtx, interrupted)
+
+			s.keepQueueRunning(retryCtx, interrupted)
+			// отказ очереди сервису не приговор: актёр держит группу до
+			// прерывания, а не сворачивает обслуживание вместе с собой
 			<-interrupted
 
 			return nil
 		}, func(error) {
 			interruptOnce.Do(func() {
 				close(interrupted)
-				cancelStart()
+				cancelRetry()
 				s.deps.runner.CancelStart()
 			})
 		}
 }
 
+// keepQueueRunning поднимает очередь заново и после остановки на ходу: без
+// опроса заказы иначе ждали бы расчёта до перезапуска процесса.
 func (s *Server) keepQueueRunning(ctx context.Context, interrupted <-chan struct{}) {
 	for {
+		// повторы кончаются только прерыванием: отказ подъёма ждёт
+		// следующей попытки, а не отчёта об ошибке
 		if err := s.startQueue(ctx); err != nil {
 			return
 		}
+		s.resumePendingOrders(ctx)
+
 		select {
 		case <-s.deps.runner.Stopped():
 		case <-interrupted:
@@ -137,6 +150,7 @@ func (s *Server) keepQueueRunning(ctx context.Context, interrupted <-chan struct
 			return
 		default:
 		}
+
 		s.logger.Error("Очередь заданий неожиданно остановилась")
 		if !s.waitBeforeRestart(interrupted) {
 			return
@@ -144,6 +158,32 @@ func (s *Server) keepQueueRunning(ctx context.Context, interrupted <-chan struct
 	}
 }
 
+// resumePendingOrders возвращает в опрос заказы, чьи задания были потеряны.
+// Ошибка не мешает уже поднятой очереди обслуживать остальные задания.
+func (s *Server) resumePendingOrders(ctx context.Context) {
+	if s.deps.pendingOrderResumer == nil {
+		return
+	}
+
+	inserted, err := s.deps.pendingOrderResumer.Resume(ctx)
+	if err != nil {
+		s.logger.Warn(
+			"Не удалось вернуть незакрытые заказы в очередь",
+			zap.Int("count", inserted),
+			zap.Error(err),
+		)
+
+		return
+	}
+
+	s.logger.Info(
+		"Незакрытые заказы возвращены в очередь",
+		zap.Int("count", inserted),
+	)
+}
+
+// waitBeforeRestart отделяет попытки подъёма: очередь, падающая сразу после
+// старта, иначе крутила бы цикл вхолостую.
 func (s *Server) waitBeforeRestart(interrupted <-chan struct{}) bool {
 	timer := time.NewTimer(s.retryDelay)
 	defer timer.Stop()
@@ -156,24 +196,40 @@ func (s *Server) waitBeforeRestart(interrupted <-chan struct{}) bool {
 	}
 }
 
+// startQueue повторяет подъём очереди, пока её не прервут: недоступная на
+// старте БД иначе оставила бы заказы неопрошенными до перезапуска процесса.
 func (s *Server) startQueue(ctx context.Context) error {
-	return retry.Do(func() error {
-		err := s.deps.runner.Start(ctx)
-		if err != nil && context.Cause(ctx) != nil {
-			return retry.Unrecoverable(context.Cause(ctx))
-		}
-		return err
-	}, s.retryForeverOptions(ctx, func(attempt uint, err error) {
-		s.logger.Warn("Повторная попытка запустить очередь заданий", zap.Uint("attempt", attempt+1), zap.Error(err))
-	})...)
+	return retry.Do(
+		func() error {
+			err := s.deps.runner.Start(ctx)
+			if err != nil && context.Cause(ctx) != nil {
+				return retry.Unrecoverable(context.Cause(ctx))
+			}
+
+			return err
+		},
+		s.retryForeverOptions(ctx, func(attempt uint, err error) {
+			s.logger.Warn(
+				"Повторная попытка запустить очередь заданий",
+				zap.Uint("attempt", attempt+1),
+				zap.Error(err),
+			)
+		})...,
+	)
 }
 
-func (s *Server) stopQueue(ctx context.Context) {
-	if s.deps.runner == nil {
-		return
-	}
-
-	if err := s.deps.runner.Stop(ctx); err != nil {
-		s.logger.Error("Не удалось остановить очередь заданий", zap.Error(err))
+// retryForeverOptions повторяет попытки до прерывания с растущей паузой.
+func (s *Server) retryForeverOptions(
+	ctx context.Context,
+	onRetry retry.OnRetryFunc,
+) []retry.Option {
+	return []retry.Option{
+		retry.Context(ctx),
+		retry.Attempts(0),
+		retry.Delay(s.retryDelay),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxDelay(retryMaxDelay),
+		retry.LastErrorOnly(true),
+		retry.OnRetry(onRetry),
 	}
 }

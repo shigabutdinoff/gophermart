@@ -13,6 +13,9 @@ template: testify
 packages:
   github.com/shigabutdinoff/gophermart/internal/order:
     interfaces:
+      Creator:
+      Lister:
+      PendingLister:
       ResultWriter:
   github.com/shigabutdinoff/gophermart/internal/balance:
     interfaces:
@@ -33,6 +36,8 @@ packages:
       Throttler:
   github.com/shigabutdinoff/gophermart/internal/server:
     interfaces:
+      pendingOrderResumer:
+      queueThrottle:
       riverLifecycle:
       throttleLifecycle:
   github.com/shigabutdinoff/gophermart/internal/handlers/route/healthcheck:
