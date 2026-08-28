@@ -1,6 +1,7 @@
 package migrations
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,10 +9,7 @@ import (
 )
 
 func TestFSContainsUsersMigration(t *testing.T) {
-	migration, err := FS.ReadFile("00001_create_users.sql")
-	require.NoError(t, err)
-
-	sql := string(migration)
+	sql := readMigrationSQL(t, "00001_create_users.sql")
 	assert.Contains(t, sql, "-- +goose Up")
 	assert.Contains(t, sql, "-- +goose Down")
 	assert.Contains(t, sql, "CREATE TABLE users")
@@ -22,10 +20,7 @@ func TestFSContainsUsersMigration(t *testing.T) {
 }
 
 func TestFSContainsOrdersMigration(t *testing.T) {
-	migration, err := FS.ReadFile("00002_create_orders.sql")
-	require.NoError(t, err)
-
-	sql := string(migration)
+	sql := readMigrationSQL(t, "00002_create_orders.sql")
 	assert.Contains(t, sql, "-- +goose Up")
 	assert.Contains(t, sql, "-- +goose Down")
 	assert.Contains(t, sql, "CREATE TABLE orders")
@@ -40,10 +35,7 @@ func TestFSContainsOrdersMigration(t *testing.T) {
 }
 
 func TestFSContainsOrderAccrualMigration(t *testing.T) {
-	migration, err := FS.ReadFile("00003_add_order_accrual.sql")
-	require.NoError(t, err)
-
-	sql := string(migration)
+	sql := readMigrationSQL(t, "00003_add_order_accrual.sql")
 	assert.Contains(t, sql, "-- +goose Up")
 	assert.Contains(t, sql, "-- +goose Down")
 	assert.Contains(t, sql, "ALTER TABLE orders ADD COLUMN accrual BIGINT")
@@ -53,6 +45,25 @@ func TestFSContainsOrderAccrualMigration(t *testing.T) {
 	assert.Contains(t, sql, "CONSTRAINT orders_accrual_non_negative CHECK (accrual >= 0);")
 	assert.Contains(t, sql, "COMMENT ON COLUMN orders.accrual IS")
 	assert.Contains(t, sql, "DROP COLUMN IF EXISTS accrual;")
+}
+
+func TestFSContainsWithdrawalsMigration(t *testing.T) {
+	sql := readMigrationSQL(t, "00004_create_withdrawals.sql")
+	assert.Contains(t, sql, "-- +goose Up")
+	assert.Contains(t, sql, "-- +goose Down")
+	assert.Contains(t, sql, "CREATE TABLE withdrawals")
+	assert.Contains(t, sql, "user_id BIGINT NOT NULL REFERENCES users (id)")
+	assert.Contains(t, sql, "CONSTRAINT withdrawals_sum_positive CHECK (sum > 0)")
+	assert.NotContains(t, sql, "CREATE INDEX")
+	assert.Contains(t, sql, "COMMENT ON COLUMN withdrawals.sum IS 'Списанные баллы в копейках';")
+
+	up, down, found := strings.Cut(sql, "-- +goose Down")
+	require.True(t, found)
+	assert.NotContains(t, up, "DROP ")
+	assert.NotContains(t, up, "orders_user_processed_idx")
+	assert.Contains(t, down, "DROP TABLE IF EXISTS withdrawals;")
+	assert.NotContains(t, down, "orders_user_processed_idx")
+	assert.NotContains(t, down, "withdrawals_user_processed_idx")
 }
 
 func TestFSHasNoLegacyMigrationFiles(t *testing.T) {
@@ -67,5 +78,15 @@ func TestFSHasNoLegacyMigrationFiles(t *testing.T) {
 		"00001_create_users.sql",
 		"00002_create_orders.sql",
 		"00003_add_order_accrual.sql",
+		"00004_create_withdrawals.sql",
 	}, names)
+}
+
+func readMigrationSQL(t *testing.T, name string) string {
+	t.Helper()
+
+	migration, err := FS.ReadFile(name)
+	require.NoError(t, err)
+
+	return string(migration)
 }

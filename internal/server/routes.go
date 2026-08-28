@@ -9,6 +9,7 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/logging"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
+	balanceroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/balance"
 	ordersroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/orders"
 )
 
@@ -28,6 +29,9 @@ func (s *Server) registerAPI(router *chi.Mux) {
 	api := apiconfig.NewAPI(router)
 	authentication.RegisterRoutes(api, s.logger, s.deps.auth, s.routeOptions())
 	ordersroute.RegisterRoutes(api, s.logger, s.deps.orders, s.routeOptions(
+		authorization.Middleware(api, s.deps.tokenParser),
+	))
+	balanceroute.RegisterRoutes(api, s.logger, s.deps.balance, s.routeOptions(
 		authorization.Middleware(api, s.deps.tokenParser),
 	))
 }

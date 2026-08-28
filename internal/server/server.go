@@ -12,12 +12,15 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
+	"github.com/shigabutdinoff/gophermart/internal/balance"
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
+	balanceroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/balance"
 	ordersroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/orders"
 	"github.com/shigabutdinoff/gophermart/internal/jobs"
 	"github.com/shigabutdinoff/gophermart/internal/order"
+	balancerepository "github.com/shigabutdinoff/gophermart/internal/repository/balance"
 	orderrepository "github.com/shigabutdinoff/gophermart/internal/repository/order"
 	userrepository "github.com/shigabutdinoff/gophermart/internal/repository/user"
 )
@@ -38,6 +41,7 @@ type Server struct {
 // deps собирает всё, что сервер отдаёт маршрутам и фоновым задачам.
 type deps struct {
 	auth        authentication.Deps
+	balance     balanceroute.Deps
 	orders      ordersroute.Deps
 	tokenParser authorization.TokenParser
 	runner      *riverRunner
@@ -113,6 +117,7 @@ func buildDeps(options depsOptions) (deps, error) {
 		return deps{}, err
 	}
 	storedOrders := orderrepository.New(options.gormDB)
+	storedBalance := balancerepository.New(options.gormDB)
 	buildQueue := options.buildQueue
 	if buildQueue == nil {
 		buildQueue = newQueueClient
@@ -137,10 +142,17 @@ func buildDeps(options depsOptions) (deps, error) {
 
 	return deps{
 		auth:        authDeps,
+		balance:     buildBalanceDeps(storedBalance),
 		orders:      buildOrderDeps(storedOrders),
 		tokenParser: options.tokens.ParseRequest,
 		runner:      queue.runner,
 	}, nil
+}
+
+func buildBalanceDeps(storedBalance *balancerepository.Repository) balanceroute.Deps {
+	return balanceroute.Deps{
+		Read: balance.NewReadService(storedBalance).Read,
+	}
 }
 
 // buildAuthDeps собирает регистрацию и вход поверх хранилища пользователей.

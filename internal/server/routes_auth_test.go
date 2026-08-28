@@ -27,6 +27,7 @@ func TestRouter_AuthRouteScopeAndPublicAccess(t *testing.T) {
 		{http.MethodPost, "/api/user/orders", "", http.StatusUnauthorized},
 		{http.MethodGet, "/api/user/orders", "", http.StatusUnauthorized},
 		{http.MethodHead, "/api/user/orders", "", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/api/user/balance", "", http.StatusUnauthorized},
 	}
 	for _, tt := range tests {
 		request, err := http.NewRequest(
