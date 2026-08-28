@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,14 @@ func TestNew(t *testing.T) {
 	assert.Equal(t, DefaultShutdownTimeout, s.shutdownTimeout)
 	assert.Equal(t, config.DefaultRequestBodyLimit, s.requestBodyLimit)
 	assert.NotNil(t, s.router)
+}
+
+func TestNew_ShutdownTimeoutOptionReplacesDefaultBudget(t *testing.T) {
+	timeout := 3 * time.Second
+
+	s := mustNew(t, zap.NewNop(), config.Default(), WithShutdownTimeout(timeout))
+
+	assert.Equal(t, timeout, s.shutdownTimeout)
 }
 
 func TestNew_RejectsShortSecretBeforeListenWithoutLeak(t *testing.T) {
