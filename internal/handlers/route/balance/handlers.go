@@ -27,6 +27,7 @@ const (
 	messageInvalidOrder      = "Неверный номер заказа"
 	messageNonPositiveSum    = "Сумма списания должна быть положительной"
 	messageInsufficientFunds = "Недостаточно средств"
+	messageOrderTaken        = "Номер заказа уже использован другим пользователем"
 )
 
 // ReadFunc отдаёт состояние счёта пользователя.
@@ -150,7 +151,9 @@ func registerWithdrawRoute(
 			http.StatusBadRequest,
 			http.StatusUnauthorized,
 			http.StatusPaymentRequired,
+			http.StatusConflict,
 			http.StatusRequestEntityTooLarge,
+			http.StatusUnsupportedMediaType,
 			http.StatusUnprocessableEntity,
 			http.StatusInternalServerError,
 		},
@@ -170,6 +173,8 @@ func registerWithdrawRoute(
 			return nil, huma.Error400BadRequest(messageNonPositiveSum)
 		case errors.Is(err, domain.ErrInsufficientFunds):
 			return nil, huma.Error402PaymentRequired(messageInsufficientFunds)
+		case errors.Is(err, domain.ErrOrderTaken):
+			return nil, huma.Error409Conflict(messageOrderTaken)
 		default:
 			return nil, route.InternalError(logger, "Не удалось списать баллы", err)
 		}

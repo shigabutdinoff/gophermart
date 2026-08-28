@@ -2,34 +2,43 @@ package balance
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
+
+	"gorm.io/gorm"
 
 	domain "github.com/shigabutdinoff/gophermart/internal/balance"
 	"github.com/shigabutdinoff/gophermart/internal/money"
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
 
-const ordersTable = "orders"
+const balanceAggregatesSQL = `
+SELECT
+    (SELECT COALESCE(SUM(accrual) FILTER (WHERE status = 'PROCESSED'), 0)
+       FROM orders WHERE user_id = ?) AS accrued,
+    (SELECT COALESCE(SUM(sum), 0)
+       FROM withdrawals WHERE user_id = ?) AS withdrawn`
 
-const balanceExpression = `
-COALESCE(SUM(accrual) FILTER (WHERE status = 'PROCESSED'), 0)
-    - (SELECT COALESCE(SUM(sum), 0) FROM withdrawals WHERE user_id = ?) AS current,
-(SELECT COALESCE(SUM(sum), 0) FROM withdrawals WHERE user_id = ?) AS withdrawn`
+const advisoryLockSQL = `SELECT pg_advisory_xact_lock(?)`
 
 const withdrawSQL = `
 INSERT INTO withdrawals (user_id, order_number, sum)
 SELECT ?, ?, ?
 WHERE (
-    SELECT COALESCE(SUM(accrual) FILTER (WHERE status = 'PROCESSED'), 0)
-      FROM orders WHERE user_id = ?
-) - (
-    SELECT COALESCE(SUM(sum), 0) FROM withdrawals WHERE user_id = ?
-) >= ?`
+    SELECT accrued - withdrawn
+      FROM (` + balanceAggregatesSQL + `) AS balance_totals
+) >= ?
+ON CONFLICT (order_number) DO NOTHING`
 
 type balanceRow struct {
 	Current   money.Points `gorm:"column:current"`
 	Withdrawn money.Points `gorm:"column:withdrawn"`
+}
+
+type withdrawalOwnerRow struct {
+	UserID int64 `gorm:"column:user_id"`
 }
 
 type withdrawalRow struct {
@@ -64,9 +73,8 @@ func (r *Repository) Balance(ctx context.Context, userID int64) (domain.Balance,
 	}
 
 	var row balanceRow
-	if err := db.Table(ordersTable).
-		Select(balanceExpression, userID, userID).
-		Where("user_id = ?", userID).
+	if err := db.Table("(?) AS balance_totals", db.Raw(balanceAggregatesSQL, userID, userID)).
+		Select("accrued - withdrawn AS current, withdrawn").
 		Take(&row).Error; err != nil {
 		return domain.Balance{}, err
 	}
@@ -98,7 +106,7 @@ func (r *Repository) ListWithdrawals(ctx context.Context, userID int64) ([]domai
 	return withdrawals, nil
 }
 
-// Withdraw записывает списание, если вычисленного остатка достаточно.
+// Withdraw сериализует списания пользователя и атомарно проверяет остаток.
 func (r *Repository) Withdraw(
 	ctx context.Context,
 	userID int64,
@@ -110,13 +118,53 @@ func (r *Repository) Withdraw(
 		return 0, err
 	}
 
-	insert := db.Exec(withdrawSQL, userID, number, sum, userID, userID, sum)
-	if insert.Error != nil {
-		return 0, fmt.Errorf("insert withdrawal: %w", insert.Error)
-	}
-	if insert.RowsAffected == 0 {
-		return domain.NotEnoughFunds, nil
+	var outcome domain.WithdrawOutcome
+	err = database.Transact(db, func(tx database.Tx) error {
+		if err := tx.DB().Exec(advisoryLockSQL, userID).Error; err != nil {
+			return fmt.Errorf("lock withdrawal balance: %w", err)
+		}
+
+		insert := tx.DB().Exec(withdrawSQL, userID, number, sum, userID, userID, sum)
+		if insert.Error != nil {
+			return fmt.Errorf("insert withdrawal: %w", insert.Error)
+		}
+		if insert.RowsAffected == 1 {
+			outcome = domain.Withdrawn
+
+			return nil
+		}
+
+		var err error
+		outcome, err = findWithdrawalOwner(tx, number, userID)
+
+		return err
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return 0, err
 	}
 
-	return domain.Withdrawn, nil
+	return outcome, nil
+}
+
+func findWithdrawalOwner(
+	tx database.Tx,
+	number string,
+	userID int64,
+) (domain.WithdrawOutcome, error) {
+	var stored withdrawalOwnerRow
+	err := tx.DB().Table("withdrawals").
+		Select("user_id").
+		Where("order_number = ?", number).
+		Take(&stored).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return domain.NotEnoughFunds, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("find withdrawal owner: %w", err)
+	}
+	if stored.UserID == userID {
+		return domain.AlreadyWithdrawn, nil
+	}
+
+	return domain.TakenByAnother, nil
 }

@@ -10,6 +10,7 @@ import (
 
 var (
 	ErrInsufficientFunds = errors.New("insufficient funds")
+	ErrOrderTaken        = errors.New("withdrawal order belongs to another user")
 	ErrNonPositiveSum    = errors.New("withdrawal sum must be positive")
 )
 
@@ -43,6 +44,8 @@ const (
 	_ WithdrawOutcome = iota
 	Withdrawn
 	NotEnoughFunds
+	TakenByAnother
+	AlreadyWithdrawn
 )
 
 // Withdrawer атомарно списывает баллы или классифицирует отказ.

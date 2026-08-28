@@ -39,10 +39,12 @@ func (s *WithdrawService) Withdraw(
 	}
 
 	switch outcome {
-	case Withdrawn:
+	case Withdrawn, AlreadyWithdrawn:
 		return nil
 	case NotEnoughFunds:
 		return ErrInsufficientFunds
+	case TakenByAnother:
+		return ErrOrderTaken
 	default:
 		return fmt.Errorf("withdraw balance: unknown outcome %d", outcome)
 	}

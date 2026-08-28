@@ -34,8 +34,8 @@ func (t Tx) SQL() (*sql.Tx, error) {
 }
 
 // Transact выполняет работу в одной транзакции подключения.
-func Transact(db *gorm.DB, work func(Tx) error) error {
+func Transact(db *gorm.DB, work func(Tx) error, opts ...*sql.TxOptions) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		return work(Tx{db: tx})
-	})
+	}, opts...)
 }

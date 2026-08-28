@@ -26,6 +26,7 @@ type TransactionState struct {
 	Begun      int
 	Committed  int
 	RolledBack int
+	Isolation  sql.IsolationLevel
 }
 
 // transactionRecorder синхронизирует счётчики: откат отменённой транзакции
@@ -35,10 +36,11 @@ type transactionRecorder struct {
 	state TransactionState
 }
 
-func (r *transactionRecorder) begin() {
+func (r *transactionRecorder) begin(isolation sql.IsolationLevel) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.state.Begun++
+	r.state.Isolation = isolation
 }
 
 func (r *transactionRecorder) commit() {
@@ -92,8 +94,8 @@ func (c *dryRunConnection) Begin() (driver.Tx, error) {
 	return c.BeginTx(context.Background(), driver.TxOptions{})
 }
 
-func (c *dryRunConnection) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	c.recorder.begin()
+func (c *dryRunConnection) BeginTx(_ context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	c.recorder.begin(sql.IsolationLevel(opts.Isolation))
 
 	return &dryRunTransaction{recorder: c.recorder}, nil
 }
@@ -232,8 +234,12 @@ type foreignPool struct {
 	recorder *transactionRecorder
 }
 
-func (p *foreignPool) BeginTx(context.Context, *sql.TxOptions) (gorm.ConnPool, error) {
-	p.recorder.begin()
+func (p *foreignPool) BeginTx(_ context.Context, opts *sql.TxOptions) (gorm.ConnPool, error) {
+	isolation := sql.LevelDefault
+	if opts != nil {
+		isolation = opts.Isolation
+	}
+	p.recorder.begin(isolation)
 
 	return &foreignTransaction{ConnPool: p.ConnPool, recorder: p.recorder}, nil
 }
