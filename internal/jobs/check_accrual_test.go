@@ -92,6 +92,7 @@ func TestDispatcher_PushesJobWithinOrderTransaction(t *testing.T) {
 	assert.Same(t, orderTx, queue.transactions[0], "задание уходит транзакцией заказа")
 	require.Len(t, queue.options, 1)
 	assert.Equal(t, "orders", queue.options[0].Queue, "задание ждут в названной очереди")
+	assert.Equal(t, river.UniqueOpts{ByArgs: true}, queue.options[0].UniqueOpts)
 }
 
 func TestDispatcher_RefusesOutsideTransaction(t *testing.T) {

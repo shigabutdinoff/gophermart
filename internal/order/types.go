@@ -24,14 +24,22 @@ const (
 	StatusProcessed  Status = "PROCESSED"
 )
 
+var finalStatuses = [...]Status{StatusProcessed, StatusInvalid}
+
 // FinalStatuses перечисляет статусы, после которых заказ не переписывается.
 func FinalStatuses() []Status {
-	return []Status{StatusProcessed, StatusInvalid}
+	return append([]Status(nil), finalStatuses[:]...)
 }
 
 // IsFinal отвечает, довёл ли расчёт заказ до конца.
 func (s Status) IsFinal() bool {
-	return s == StatusProcessed || s == StatusInvalid
+	for _, final := range finalStatuses {
+		if s == final {
+			return true
+		}
+	}
+
+	return false
 }
 
 type Order struct {
