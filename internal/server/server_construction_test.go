@@ -15,6 +15,7 @@ func TestNew(t *testing.T) {
 
 	assert.Equal(t, config.DefaultRunAddress, s.runAddress)
 	assert.Equal(t, DefaultShutdownTimeout, s.shutdownTimeout)
+	assert.Equal(t, config.DefaultRequestBodyLimit, s.requestBodyLimit)
 	assert.NotNil(t, s.router)
 }
 
@@ -48,4 +49,9 @@ func TestNew_BuildsBalanceDependencies(t *testing.T) {
 	assert.NotNil(t, server.deps.balance.Read)
 	assert.NotNil(t, server.deps.balance.Withdraw)
 	assert.NotNil(t, server.deps.balance.List)
+}
+
+func TestServer_AddrBeforeListen(t *testing.T) {
+	s := mustNew(t, zap.NewNop(), config.Default())
+	assert.Empty(t, s.Addr())
 }
