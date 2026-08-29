@@ -10,35 +10,28 @@ import (
 	"github.com/avast/retry-go/v4"
 	"github.com/oklog/run"
 	"go.uber.org/zap"
-
-	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
 
 const retryMaxDelay = 30 * time.Second
 
-type retryTimer interface {
-	After(time.Duration) <-chan time.Time
-}
-
-func (s *Server) retryForeverOptions(ctx context.Context, timer retryTimer, onRetry retry.OnRetryFunc) []retry.Option {
-	options := []retry.Option{
+func (s *Server) retryForeverOptions(ctx context.Context, onRetry retry.OnRetryFunc) []retry.Option {
+	return []retry.Option{
 		retry.Context(ctx), retry.Attempts(0), retry.Delay(s.retryDelay),
 		retry.DelayType(retry.BackOffDelay), retry.MaxDelay(retryMaxDelay),
 		retry.LastErrorOnly(true), retry.OnRetry(onRetry),
 	}
-	if timer != nil {
-		options = append(options, retry.WithTimer(timer))
-	}
-	return options
 }
 
 // Run работает до отмены контекста, затем останавливается за shutdownTimeout.
 func (s *Server) Run(ctx context.Context) error {
-	s.initDatabase(ctx, database.Migrate)
-	defer s.closeDatabase()
+	ready, recoverDatabase, interruptDatabaseRecovery := s.databaseLifecycle(ctx, s.migrateDatabase)
+	if interruptDatabaseRecovery != nil {
+		defer interruptDatabaseRecovery(nil)
+	}
 
 	if s.ln == nil {
 		if err := s.listen(); err != nil {
+			s.closeDatabase()
 			return err
 		}
 	}
@@ -46,6 +39,7 @@ func (s *Server) Run(ctx context.Context) error {
 	srv, err := s.newHTTPServer()
 	if err != nil {
 		_ = s.ln.Close()
+		s.closeDatabase()
 		return err
 	}
 	s.srv = srv
@@ -69,8 +63,11 @@ func (s *Server) Run(ctx context.Context) error {
 		// обслуживание прервалось само, соединения закрываются принудительно
 		_ = s.srv.Close()
 	})
+	if recoverDatabase != nil {
+		group.Add(recoverDatabase, interruptDatabaseRecovery)
+	}
 	if s.deps.runner != nil {
-		group.Add(s.queueActor(ctx))
+		group.Add(s.queueActor(ctx, ready))
 	}
 	group.Add(run.ContextHandler(ctx))
 	s.logger.Info("Сервер запущен", zap.String("address", s.Addr()))
@@ -84,7 +81,9 @@ func (s *Server) Run(ctx context.Context) error {
 	if shutdownErr != nil {
 		s.logger.Error("Не удалось остановить обслуживание", zap.Error(shutdownErr))
 	}
-	s.stopQueue(budget.context())
+	shutdownCtx := budget.context()
+	s.stopQueue(shutdownCtx)
+	_ = s.closeDatabaseBeforeDeadline(shutdownCtx)
 
 	// неудачи остановки остаются в логе: процесс уже сворачивается, и код
 	// выхода не должен отличать штатный сигнал от затянувшегося дренажа
@@ -93,12 +92,23 @@ func (s *Server) Run(ctx context.Context) error {
 
 // queueActor запускает очередь один раз и держит её в группе до остановки.
 // Ошибка очереди не останавливает HTTP-сервис.
-func (s *Server) queueActor(ctx context.Context) (func() error, func(error)) {
+func (s *Server) queueActor(ctx context.Context, readyChannels ...<-chan struct{}) (func() error, func(error)) {
 	interrupted := make(chan struct{})
 	startCtx, cancelStart := context.WithCancel(context.WithoutCancel(ctx))
 	var interruptOnce sync.Once
+	readyDefault := make(chan struct{})
+	close(readyDefault)
+	var ready <-chan struct{} = readyDefault
+	if len(readyChannels) != 0 {
+		ready = readyChannels[0]
+	}
 
 	return func() error {
+			select {
+			case <-ready:
+			case <-interrupted:
+				return nil
+			}
 			if err := s.deps.runner.Start(startCtx); err != nil {
 				s.logger.Error("Не удалось запустить очередь заданий", zap.Error(err))
 			}

@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"time"
 
+	"github.com/avast/retry-go/v4"
 	"go.uber.org/zap"
 
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/healthcheck"
@@ -51,22 +53,58 @@ func openDatabase(logger *zap.Logger, dsn string) (database.Session, *sql.DB) {
 func (s *Server) initDatabase(
 	ctx context.Context,
 	migrate func(context.Context, *sql.DB) error,
-) {
+) error {
 	if s.sqlDB == nil {
-		return
+		return database.ErrUnavailable
 	}
 
 	if err := s.sqlDB.PingContext(ctx); err != nil {
 		s.logger.Error("БД недоступна, миграции пропущены", zap.Error(err))
-		return
+		return err
 	}
 
 	if err := migrate(ctx, s.sqlDB); err != nil {
 		s.logger.Error("Не удалось применить миграции", zap.Error(err))
-		return
+		return err
 	}
 
 	s.logger.Info("Миграции выполнены")
+	return nil
+}
+
+func (s *Server) databaseLifecycle(ctx context.Context, migrate func(context.Context, *sql.DB) error) (<-chan struct{}, func() error, func(error)) {
+	ready := make(chan struct{})
+	if err := s.initDatabase(ctx, migrate); err == nil {
+		close(ready)
+		return ready, nil, nil
+	}
+	if s.sqlDB == nil {
+		return ready, nil, nil
+	}
+	actor, interrupt := s.databaseRecoveryActor(ctx, ready, migrate)
+	return ready, actor, interrupt
+}
+
+func (s *Server) databaseRecoveryActor(ctx context.Context, ready chan<- struct{}, migrate func(context.Context, *sql.DB) error) (func() error, func(error)) {
+	if s.sqlDB == nil {
+		return nil, nil
+	}
+	recoveryCtx, cancelRecovery := context.WithCancel(ctx)
+	var interruptOnce sync.Once
+	return func() error {
+		err := retry.Do(
+			func() error { return s.initDatabase(recoveryCtx, migrate) },
+			s.retryForeverOptions(recoveryCtx, func(attempt uint, err error) {
+				s.logger.Warn("Повторная попытка подготовить БД", zap.Uint("attempt", attempt+1), zap.Error(err))
+			})...,
+		)
+		if err != nil {
+			return nil
+		}
+		close(ready)
+		<-recoveryCtx.Done()
+		return nil
+	}, func(error) { interruptOnce.Do(cancelRecovery) }
 }
 
 func (s *Server) closeDatabase() {
