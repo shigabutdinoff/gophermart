@@ -12,6 +12,7 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/authorization"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/decompress"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/logging"
+	"github.com/shigabutdinoff/gophermart/internal/handlers/middleware/security"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
 	balanceroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/balance"
@@ -31,6 +32,7 @@ func (s *Server) setupRoutes() {
 func (s *Server) installMiddleware(router *chi.Mux) {
 	// журнал стоит первым, он же восстанавливается после паник
 	router.Use(logging.WithLogging(s.logger))
+	router.Use(security.Headers)
 	// chi держит HEAD и GET разными маршрутами, GET-обработчик отвечает на оба
 	router.Use(middleware.GetHead)
 	router.Use(middleware.Heartbeat(healthcheck.LivePath))

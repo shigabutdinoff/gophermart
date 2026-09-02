@@ -118,3 +118,21 @@ func TestRouter_LogsEveryRequest(t *testing.T) {
 		assert.EqualValues(t, tc.want, fields["http.response.status_code"])
 	}
 }
+
+// Заголовки безопасности стоят на всех ответах сервиса, включая отказы.
+func TestServerRoutes_CarrySecurityHeaders(t *testing.T) {
+	server := mustNew(t, zap.NewNop(), config.Default())
+	t.Cleanup(server.closeDatabase)
+
+	for _, path := range []string{"/api/user/register", "/api/user/orders"} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, http.NoBody)
+			response := httptest.NewRecorder()
+
+			server.router.ServeHTTP(response, request)
+
+			assert.Equal(t, "nosniff", response.Header().Get("X-Content-Type-Options"))
+			assert.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+		})
+	}
+}
