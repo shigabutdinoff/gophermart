@@ -86,6 +86,16 @@ func TestRegister_NamesViolatedCredentialsField(t *testing.T) {
 			body:     `{"login":"   ","password":"password"}`,
 			location: "body.login",
 		},
+		{
+			name:     "пустой пароль",
+			body:     `{"login":"user","password":""}`,
+			location: "body.password",
+		},
+		{
+			name:     "длинный пароль",
+			body:     `{"login":"user","password":"` + strings.Repeat("p", 129) + `"}`,
+			location: "body.password",
+		},
 	}
 
 	for _, tt := range tests {
@@ -263,4 +273,22 @@ func TestRegister_ProblemBodyHasNoSchemaLink(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, response.Code)
 	assert.NotContains(t, response.Body.String(), "$schema")
+}
+
+// Отказ по паролю не должен возвращать сам пароль: huma кладёт значение поля
+// в ErrorDetail.Value, поэтому границы меряет резолвер, а не схема.
+func TestRegister_RejectedPasswordNeverReachesResponse(t *testing.T) {
+	const secret = "password-that-must-not-leak"
+	calls := 0
+
+	response := serveRegister(
+		registerReturning(handlerTestToken, nil, &calls),
+		"application/json",
+		`{"login":"user","password":"`+strings.Repeat(secret, 5)+`"}`,
+	)
+
+	assertProblem(t, response, http.StatusBadRequest, "")
+	assert.Contains(t, problemLocations(t, response), "body.password")
+	assert.NotContains(t, response.Body.String(), secret)
+	assert.Zero(t, calls)
 }
