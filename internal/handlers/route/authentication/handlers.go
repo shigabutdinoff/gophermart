@@ -46,11 +46,27 @@ type Deps struct {
 type Options = route.Options
 
 type registerInput struct {
-	Body registerBody
+	Body   registerBody
+	secure bool
+}
+
+// Resolve запоминает, пришёл ли запрос по TLS: cookie с токеном нельзя
+// отдавать без Secure, но и помечать её так на голом HTTP нельзя.
+func (i *registerInput) Resolve(ctx huma.Context) []error {
+	i.secure = ctx.TLS() != nil
+
+	return nil
 }
 
 type loginInput struct {
-	Body loginBody
+	Body   loginBody
+	secure bool
+}
+
+func (i *loginInput) Resolve(ctx huma.Context) []error {
+	i.secure = ctx.TLS() != nil
+
+	return nil
 }
 
 // authOutput несёт токен заголовком и cookie, тело успеха задано ТЗ пустым.
@@ -97,7 +113,7 @@ func registerRegistrationRoute(
 		token, err := register(ctx, credentials)
 		switch {
 		case err == nil:
-			return authenticated(token), nil
+			return authenticated(token, in.secure), nil
 		case errors.Is(err, auth.ErrLoginTaken):
 			return nil, huma.Error409Conflict(MessageLoginTaken)
 		default:
@@ -133,7 +149,7 @@ func registerLoginRoute(
 		result, err := login(ctx, credentials, middleware.GetClientIPAddr(ctx))
 		switch {
 		case err == nil:
-			return authenticated(result.Token), nil
+			return authenticated(result.Token, in.secure), nil
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			return nil, huma.Error401Unauthorized(MessageInvalidCredentials)
 		case errors.Is(err, auth.ErrRateLimited):
@@ -148,7 +164,9 @@ func registerLoginRoute(
 }
 
 // authenticated отдаёт выпущенный токен заголовком и session-кукой.
-func authenticated(token auth.IssuedToken) *authOutput {
+// Strict закрывает кросс-сайтовый запрос с этой кукой целиком: свой фронтенд
+// у сервиса один, а ТЗ разрешает ходить и одним заголовком.
+func authenticated(token auth.IssuedToken, secure bool) *authOutput {
 	return &authOutput{
 		Authorization: "Bearer " + token.Value,
 		SetCookie: http.Cookie{
@@ -158,8 +176,8 @@ func authenticated(token auth.IssuedToken) *authOutput {
 			Expires:  token.ExpiresAt,
 			MaxAge:   int(auth.TokenTTL / time.Second),
 			HttpOnly: true,
-			Secure:   false,
-			SameSite: http.SameSiteLaxMode,
+			Secure:   secure,
+			SameSite: http.SameSiteStrictMode,
 		},
 	}
 }

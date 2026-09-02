@@ -146,9 +146,10 @@ func TestRegister_ValidMediaTypesNormalizeAndIgnoreUnknownFields(t *testing.T) {
 			assert.Equal(t, "signed-token", cookie.Value)
 			assert.Equal(t, "/", cookie.Path)
 			assert.True(t, cookie.HttpOnly)
+			// запрос httptest идёт без TLS, помечать куку Secure нечем
 			assert.False(t, cookie.Secure)
 			assert.Empty(t, cookie.Domain)
-			assert.Equal(t, http.SameSiteLaxMode, cookie.SameSite)
+			assert.Equal(t, http.SameSiteStrictMode, cookie.SameSite)
 			assert.Equal(t, int(auth.TokenTTL/time.Second), cookie.MaxAge)
 			assert.Equal(t, handlerTestToken.ExpiresAt.UTC(), cookie.Expires.UTC())
 		})
@@ -291,4 +292,21 @@ func TestRegister_RejectedPasswordNeverReachesResponse(t *testing.T) {
 	assert.Contains(t, problemLocations(t, response), "body.password")
 	assert.NotContains(t, response.Body.String(), secret)
 	assert.Zero(t, calls)
+}
+
+// По TLS та же кука обязана уйти помеченной Secure.
+func TestRegister_SecureCookieFollowsRequestScheme(t *testing.T) {
+	calls := 0
+
+	response := serveRegisterOverTLS(
+		registerReturning(handlerTestToken, nil, &calls),
+		`{"login":"user","password":"password"}`,
+	)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	result := response.Result()
+	defer result.Body.Close()
+	cookies := result.Cookies()
+	require.Len(t, cookies, 1)
+	assert.True(t, cookies[0].Secure)
 }

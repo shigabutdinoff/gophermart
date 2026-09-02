@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +58,17 @@ func serve(handler http.Handler, path, contentType, body string) *httptest.Respo
 
 func serveRegister(deps Deps, contentType, body string) *httptest.ResponseRecorder {
 	return serve(newRouter(zap.NewNop(), deps, testBodyLimit), registerPath, contentType, body)
+}
+
+// serveRegisterOverTLS повторяет регистрацию по защищённому соединению.
+func serveRegisterOverTLS(deps Deps, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodPost, registerPath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = &tls.ConnectionState{}
+	response := httptest.NewRecorder()
+	newRouter(zap.NewNop(), deps, testBodyLimit).ServeHTTP(response, request)
+
+	return response
 }
 
 func serveLogin(deps Deps, contentType, body string) *httptest.ResponseRecorder {
