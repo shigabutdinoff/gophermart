@@ -3,7 +3,6 @@ package order
 import (
 	"context"
 	"errors"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,7 +15,7 @@ import (
 )
 
 func TestRepository_MissingCurrentDatabaseIsControlled(t *testing.T) {
-	repository := newRepositoryWithPusher(t, nil, (&pusherState{}).mock(t, 0))
+	repository := newRepositoryWithPusher(t, database.Session{}, (&testkit.RecordingPusher{}).ExpectPushes(t, 0))
 
 	_, createErr := repository.CreateOrFindOwner(context.Background(), "12345678903", 1)
 	_, listErr := repository.ListByUser(context.Background(), 1)
@@ -26,81 +25,73 @@ func TestRepository_MissingCurrentDatabaseIsControlled(t *testing.T) {
 }
 
 func TestRepository_CreateOrFindOwnerCreatesNewOrder(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
-	jobs := &pusherState{}
+	session, gormDB := testkit.NewDryRunSession(t)
+	jobs := &testkit.RecordingPusher{}
 	number := "12345678903"
-	var query string
-	var variables []any
-	var destination *orderRow
-	require.NoError(t, gormDB.Callback().Create().After("testkit:dry-run-create-result").Register(
-		"test:observe-order-create",
-		func(tx *gorm.DB) {
-			query = tx.Statement.SQL.String()
-			variables = slices.Clone(tx.Statement.Vars)
-			destination, _ = tx.Statement.Dest.(*orderRow)
-		},
-	))
+	observed := testkit.ObserveStatements(t, gormDB)
 
-	outcome, err := newRepositoryWithPusher(t, gormDB, jobs.mock(t, 1)).
+	outcome, err := newRepositoryWithPusher(t, session, jobs.ExpectPushes(t, 1)).
 		CreateOrFindOwner(context.Background(), number, 42)
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.Created, outcome)
-	require.NotNil(t, destination)
+	statement := observed()
+	destination, ok := statement.Dest.(*orderRow)
+	require.True(t, ok)
 	assert.Equal(t, number, destination.Number)
 	assert.Equal(t, int64(42), destination.UserID)
 	assert.Equal(t, domain.StatusNew, destination.Status)
 	assert.Nil(t, destination.Accrual)
-	assert.Contains(t, query, `INSERT INTO "orders" ("number","user_id","status","uploaded_at","accrual")`)
-	assert.Contains(t, query, `ON CONFLICT ("number") DO NOTHING`)
-	require.Len(t, variables, 5)
-	assert.Equal(t, number, variables[0])
-	assert.Equal(t, int64(42), variables[1])
-	assert.Equal(t, domain.StatusNew, variables[2])
-	assert.Nil(t, variables[4])
+	assert.Contains(t, statement.SQL, `INSERT INTO "orders" ("number","user_id","status","uploaded_at","accrual")`)
+	assert.Contains(t, statement.SQL, `ON CONFLICT ("number") DO NOTHING`)
+	require.Len(t, statement.Variables, 5)
+	assert.Equal(t, number, statement.Variables[0])
+	assert.Equal(t, int64(42), statement.Variables[1])
+	assert.Equal(t, domain.StatusNew, statement.Variables[2])
+	assert.Nil(t, statement.Variables[4])
 	assert.Equal(t, testkit.TransactionState{Begun: 1, Committed: 1}, testkit.TransactionStateOf(t, gormDB))
-	assert.Equal(t, []string{number}, jobs.numbers)
-	require.Len(t, jobs.transactions, 1)
-	assert.NotNil(t, jobs.transactions[0], "задание ставится транзакцией заказа")
+	assert.Equal(t, []string{number}, jobs.Numbers)
+	require.Len(t, jobs.Transactions, 1)
+	assert.NotNil(t, jobs.Transactions[0], "задание ставится транзакцией заказа")
 }
 
 func TestRepository_CreateOrFindOwnerRecognizesRepeatBySameOwner(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
-	jobs := &pusherState{}
-	testkit.SetCreateResult(t, gormDB, 0, nil)
-	testkit.SetQueryResult(t, gormDB, []orderRow{{Number: "12345678903", UserID: 42}}, nil)
+	session, gormDB := testkit.NewDryRunSession(t)
+	jobs := &testkit.RecordingPusher{}
+	testkit.SetCreateResult(gormDB, 0, nil)
+	testkit.SetQueryResult(gormDB, []orderRow{{Number: "12345678903", UserID: 42}}, nil)
 
-	outcome, err := newRepositoryWithPusher(t, gormDB, jobs.mock(t, 0)).
+	outcome, err := newRepositoryWithPusher(t, session, jobs.ExpectPushes(t, 0)).
 		CreateOrFindOwner(context.Background(), "12345678903", 42)
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.AlreadyOwned, outcome)
 	assert.Equal(t, testkit.TransactionState{Begun: 1, Committed: 1}, testkit.TransactionStateOf(t, gormDB))
-	assert.Empty(t, jobs.numbers, "повтор заказа задания не заводит")
+	assert.Empty(t, jobs.Numbers, "повтор заказа задания не заводит")
 }
 
 func TestRepository_CreateOrFindOwnerRecognizesAnotherOwner(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
-	jobs := &pusherState{}
-	testkit.SetCreateResult(t, gormDB, 0, nil)
-	testkit.SetQueryResult(t, gormDB, []orderRow{{Number: "12345678903", UserID: 7}}, nil)
+	session, gormDB := testkit.NewDryRunSession(t)
+	jobs := &testkit.RecordingPusher{}
+	testkit.SetCreateResult(gormDB, 0, nil)
+	testkit.SetQueryResult(gormDB, []orderRow{{Number: "12345678903", UserID: 7}}, nil)
 
-	outcome, err := newRepositoryWithPusher(t, gormDB, jobs.mock(t, 0)).
+	outcome, err := newRepositoryWithPusher(t, session, jobs.ExpectPushes(t, 0)).
 		CreateOrFindOwner(context.Background(), "12345678903", 42)
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.OwnedByAnother, outcome)
 	assert.Equal(t, testkit.TransactionState{Begun: 1, Committed: 1}, testkit.TransactionStateOf(t, gormDB))
-	assert.Empty(t, jobs.numbers, "чужой заказ задания не заводит")
+	assert.Empty(t, jobs.Numbers, "чужой заказ задания не заводит")
 }
 
 func TestRepository_CreateOrFindOwnerKeepsWriteError(t *testing.T) {
 	storageErr := errors.New("storage")
-	gormDB := testkit.NewDryRunDB(t)
-	jobs := &pusherState{}
-	testkit.SetCreateResult(t, gormDB, 0, storageErr)
+	session, gormDB := testkit.NewDryRunSession(t)
+	jobs := &testkit.RecordingPusher{}
+	testkit.SetCreateResult(gormDB, 0, storageErr)
 
-	_, err := newRepositoryWithPusher(t, gormDB, jobs.mock(t, 0)).
+	_, err := newRepositoryWithPusher(t, session, jobs.ExpectPushes(t, 0)).
 		CreateOrFindOwner(context.Background(), "12345678903", 1)
 
 	require.ErrorIs(t, err, storageErr)
@@ -109,10 +100,10 @@ func TestRepository_CreateOrFindOwnerKeepsWriteError(t *testing.T) {
 
 func TestRepository_CreateOrFindOwnerRollsBackWhenJobIsNotQueued(t *testing.T) {
 	queueErr := errors.New("queue")
-	gormDB := testkit.NewDryRunDB(t)
-	jobs := &pusherState{err: queueErr}
+	session, gormDB := testkit.NewDryRunSession(t)
+	jobs := &testkit.RecordingPusher{Err: queueErr}
 
-	_, err := newRepositoryWithPusher(t, gormDB, jobs.mock(t, 1)).
+	_, err := newRepositoryWithPusher(t, session, jobs.ExpectPushes(t, 1)).
 		CreateOrFindOwner(context.Background(), "12345678903", 42)
 
 	require.ErrorIs(t, err, queueErr)
@@ -120,16 +111,17 @@ func TestRepository_CreateOrFindOwnerRollsBackWhenJobIsNotQueued(t *testing.T) {
 }
 
 func TestRepository_CreateOrFindOwnerRefusesWithoutPusher(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
+	session, gormDB := testkit.NewDryRunSession(t)
 
-	_, err := New(gormDB).CreateOrFindOwner(context.Background(), "12345678903", 42)
+	_, err := New(session).
+		CreateOrFindOwner(context.Background(), "12345678903", 42)
 
 	require.ErrorIs(t, err, errPusherMissing)
 	assert.Equal(t, testkit.TransactionState{}, testkit.TransactionStateOf(t, gormDB))
 }
 
 func TestRepository_CreateOrFindOwnerReportsMissingDatabaseFirst(t *testing.T) {
-	_, err := New(nil).CreateOrFindOwner(context.Background(), "12345678903", 42)
+	_, err := New(database.Session{}).CreateOrFindOwner(context.Background(), "12345678903", 42)
 
 	// без БД очередь и не подключалась, причина отказа именно она
 	require.ErrorIs(t, err, database.ErrUnavailable)
@@ -137,31 +129,31 @@ func TestRepository_CreateOrFindOwnerReportsMissingDatabaseFirst(t *testing.T) {
 }
 
 func TestRepository_AttachPusherRejectsSecondAttachment(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
-	repository := New(gormDB)
-	first := &pusherState{}
-	second := &pusherState{}
+	session, _ := testkit.NewDryRunSession(t)
+	repository := New(session)
+	first := &testkit.RecordingPusher{}
+	second := &testkit.RecordingPusher{}
 
-	require.NoError(t, repository.AttachPusher(first.mock(t, 1)))
-	err := repository.AttachPusher(second.mock(t, 0))
+	require.NoError(t, repository.AttachPusher(first.ExpectPushes(t, 1)))
+	err := repository.AttachPusher(second.ExpectPushes(t, 0))
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "already configured")
 	_, err = repository.CreateOrFindOwner(context.Background(), "12345678903", 42)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"12345678903"}, first.numbers)
-	assert.Empty(t, second.numbers)
+	assert.Equal(t, []string{"12345678903"}, first.Numbers)
+	assert.Empty(t, second.Numbers)
 }
 
 func TestRepository_AttachPusherRejectsNilWithoutConsumingAttachment(t *testing.T) {
-	repository := New(nil)
+	repository := New(database.Session{})
 
 	err := repository.AttachPusher(nil)
 
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, errPusherMissing)
 	assert.ErrorContains(t, err, "nil")
-	require.NoError(t, repository.AttachPusher((&pusherState{}).mock(t, 0)))
+	require.NoError(t, repository.AttachPusher((&testkit.RecordingPusher{}).ExpectPushes(t, 0)))
 }
 
 func TestRepository_CreateOrFindOwnerKeepsReadError(t *testing.T) {
@@ -169,23 +161,42 @@ func TestRepository_CreateOrFindOwnerKeepsReadError(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
+		want error
 	}{
-		{name: "ошибка хранилища", err: storageErr},
-		{name: "отсутствующая строка", err: gorm.ErrRecordNotFound},
+		{name: "ошибка хранилища", err: storageErr, want: storageErr},
+		{
+			name: "отсутствующая строка",
+			err:  gorm.ErrRecordNotFound,
+			want: domain.ErrNotFound,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			gormDB := testkit.NewDryRunDB(t)
-			jobs := &pusherState{}
-			testkit.SetCreateResult(t, gormDB, 0, nil)
-			testkit.SetQueryResult(t, gormDB, []orderRow(nil), test.err)
+			session, gormDB := testkit.NewDryRunSession(t)
+			jobs := &testkit.RecordingPusher{}
+			testkit.SetCreateResult(gormDB, 0, nil)
+			testkit.SetQueryResult(gormDB, []orderRow(nil), test.err)
 
-			_, err := newRepositoryWithPusher(t, gormDB, jobs.mock(t, 0)).
+			_, err := newRepositoryWithPusher(t, session, jobs.ExpectPushes(t, 0)).
 				CreateOrFindOwner(context.Background(), "12345678903", 1)
 
-			require.ErrorIs(t, err, test.err)
+			require.ErrorIs(t, err, test.want)
+			assert.NotErrorIs(t, err, gorm.ErrRecordNotFound)
 			assert.Equal(t, testkit.TransactionState{Begun: 1, RolledBack: 1}, testkit.TransactionStateOf(t, gormDB))
 		})
 	}
+}
+
+// Ту же защиту репозиторий обязан дать и на живом пути создания заказа.
+func TestRepository_CreateOrFindOwnerRefusesTransactionOutsideDatabaseSQL(t *testing.T) {
+	gormDB := testkit.NewDryRunDBWithoutSQLTransaction(t)
+	testkit.SetCreateResult(gormDB, 1, nil)
+	jobs := &testkit.RecordingPusher{}
+
+	_, err := newRepositoryWithPusher(t, database.NewSession(gormDB), jobs.ExpectPushes(t, 0)).
+		CreateOrFindOwner(context.Background(), "12345678903", 1)
+
+	require.ErrorIs(t, err, database.ErrOutsideTransaction)
+	assert.Equal(t, testkit.TransactionState{Begun: 1, RolledBack: 1}, testkit.TransactionStateOf(t, gormDB))
 }

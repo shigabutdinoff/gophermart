@@ -34,7 +34,7 @@ func TestHandlersLogInternalErrors(t *testing.T) {
 		{
 			name: "login",
 			run: func(logger *zap.Logger, err error) *httptest.ResponseRecorder {
-				deps := loginReturning(auth.IssuedToken{}, err, nil)
+				deps := loginReturning(auth.IssuedToken{}, err)
 				return serve(newRouter(logger, deps),
 					loginPath, "application/json",
 					`{"login":"user","password":"password"}`)
@@ -66,7 +66,7 @@ func TestHandlersDoNotLogClientErrors(t *testing.T) {
 		registerPath, "application/json", `{"login":"user","password":"password"}`,
 	)
 	serve(
-		newRouter(logger, loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials, nil)),
+		newRouter(logger, loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials)),
 		loginPath, "application/json", `{"login":"user","password":"password"}`,
 	)
 

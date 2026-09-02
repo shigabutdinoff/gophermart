@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
@@ -16,23 +15,23 @@ const (
 	databaseConnMaxIdleTime = time.Minute
 )
 
-func openDatabase(logger *zap.Logger, dsn string) (*gorm.DB, *sql.DB) {
-	gormDB, err := database.Connection(dsn)
+func openDatabase(logger *zap.Logger, dsn string) (database.Session, *sql.DB) {
+	session, err := database.Open(dsn)
 	if err != nil {
 		logger.Warn("Не удалось открыть соединение с БД", zap.Error(err))
-		return nil, nil
+		return database.Session{}, nil
 	}
 
-	sqlDB, err := gormDB.DB()
+	sqlDB, err := session.Pool()
 	if err != nil {
 		logger.Warn("Не удалось получить пул соединений БД", zap.Error(err))
-		return nil, nil
+		return database.Session{}, nil
 	}
 	sqlDB.SetMaxOpenConns(databaseMaxConns)
 	sqlDB.SetMaxIdleConns(databaseMaxConns)
 	sqlDB.SetConnMaxIdleTime(databaseConnMaxIdleTime)
 
-	return gormDB, sqlDB
+	return session, sqlDB
 }
 
 func (s *Server) initDatabase(

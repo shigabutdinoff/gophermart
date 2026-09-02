@@ -35,9 +35,9 @@ type Repository struct {
 	session database.Session
 }
 
-// New принимает nil вместо БД, тогда репозиторий отвечает отказом.
-func New(db *gorm.DB) *Repository {
-	return &Repository{session: database.NewSession(db)}
+// New принимает нулевую сессию вместо БД, тогда репозиторий отвечает отказом.
+func New(session database.Session) *Repository {
+	return &Repository{session: session}
 }
 
 func (r *Repository) Create(

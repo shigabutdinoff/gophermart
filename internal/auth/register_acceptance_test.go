@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -24,6 +25,7 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/apiconfig"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/authentication"
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
+	"github.com/shigabutdinoff/gophermart/internal/testsupport"
 )
 
 // registerHandler собирает маршрут регистрации так же, как это делает сервер.
@@ -40,77 +42,77 @@ func registerHandler(register authentication.CredentialsFunc) http.Handler {
 	return router
 }
 
+// Обе регистрации доходят до хранилища и ждут там: пузырь подтверждает это
+// сам, без сторожа на настоящих часах.
 func TestRegisterConcurrentEquivalentLoginsCreateExactlyOneUser(t *testing.T) {
-	bodies := []string{
-		`{"login":" ConcurrentUser ","password":"password"}`,
-		`{"login":"concurrentuser","password":"password"}`,
-	}
-	state := newAcceptanceUserState()
-	createArrived := make(chan struct{}, len(bodies))
-	createRelease := make(chan struct{})
-	releaseCreates := sync.OnceFunc(func() { close(createRelease) })
-	defer releaseCreates()
-	state.createArrived = createArrived
-	state.createRelease = createRelease
-	users := authmocks.NewMockUserCreator(t)
-	users.EXPECT().Create(
-		mock.Anything,
-		"concurrentuser",
-		mock.MatchedBy(func(passwordHash string) bool {
-			return passwordHash != "" && passwordHash != "password"
-		}),
-	).RunAndReturn(state.create).Twice()
-	tokens := authmocks.NewMockTokenIssuer(t)
-	tokens.EXPECT().Issue(int64(1)).Return(acceptanceIssuedToken(1), nil).Once()
-	service := auth.NewRegisterService(users, auth.Argon2Passwords{}, tokens)
-	handler := registerHandler(service.Register)
-	responses := make([]*httptest.ResponseRecorder, len(bodies))
-	start := make(chan struct{})
-	var wait sync.WaitGroup
-
-	for index, body := range bodies {
-		wait.Go(func() {
-			request := httptest.NewRequest(
-				http.MethodPost,
-				"/api/user/register",
-				strings.NewReader(body),
-			)
-			request.Header.Set("Content-Type", "application/json")
-			response := httptest.NewRecorder()
-			<-start
-			handler.ServeHTTP(response, request)
-			responses[index] = response
-		})
-	}
-	close(start)
-	for range bodies {
-		select {
-		case <-createArrived:
-		case <-time.After(5 * time.Second):
-			require.FailNow(t, "concurrent registration did not reach the repository")
+	synctest.Test(t, func(t *testing.T) {
+		bodies := []string{
+			`{"login":" ConcurrentUser ","password":"password"}`,
+			`{"login":"concurrentuser","password":"password"}`,
 		}
-	}
-	releaseCreates()
-	wait.Wait()
+		state := newAcceptanceUserState()
+		createArrived := make(chan struct{}, len(bodies))
+		createRelease := make(chan struct{})
+		releaseCreates := sync.OnceFunc(func() { close(createRelease) })
+		defer releaseCreates()
+		state.createArrived = createArrived
+		state.createRelease = createRelease
+		users := authmocks.NewMockUserCreator(t)
+		users.EXPECT().Create(
+			mock.Anything,
+			"concurrentuser",
+			mock.MatchedBy(func(passwordHash string) bool {
+				return passwordHash != "" && passwordHash != "password"
+			}),
+		).RunAndReturn(state.create).Twice()
+		tokens := authmocks.NewMockTokenIssuer(t)
+		tokens.EXPECT().Issue(int64(1)).Return(acceptanceIssuedToken(1), nil).Once()
+		service := auth.NewRegisterService(users, auth.Argon2Passwords{}, tokens)
+		handler := registerHandler(service.Register)
+		responses := make([]*httptest.ResponseRecorder, len(bodies))
+		start := make(chan struct{})
+		var wait sync.WaitGroup
 
-	statuses := []int{responses[0].Code, responses[1].Code}
-	assert.ElementsMatch(t, []int{http.StatusOK, http.StatusConflict}, statuses)
-	for _, response := range responses {
-		if response.Code == http.StatusOK {
-			assert.NotEmpty(t, response.Header().Get("Authorization"))
-			assert.Len(t, response.Header().Values("Set-Cookie"), 1)
-			continue
+		for index, body := range bodies {
+			wait.Go(func() {
+				request := httptest.NewRequest(
+					http.MethodPost,
+					"/api/user/register",
+					strings.NewReader(body),
+				)
+				request.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				<-start
+				handler.ServeHTTP(response, request)
+				responses[index] = response
+			})
 		}
-		assert.Contains(t, response.Body.String(), authentication.MessageLoginTaken)
-		assert.Equal(t, "application/problem+json", response.Header().Get("Content-Type"))
-		assert.Empty(t, response.Header().Get("Authorization"))
-		assert.Empty(t, response.Header().Values("Set-Cookie"))
-	}
+		close(start)
+		for range bodies {
+			testsupport.WaitValue(t, createArrived, "регистрация не дошла до хранилища")
+		}
+		releaseCreates()
+		wait.Wait()
 
-	persisted := state.snapshot()
-	require.Len(t, persisted, 1)
-	assert.Equal(t, "concurrentuser", persisted[0].Login)
-	assert.NotEqual(t, "password", persisted[0].PasswordHash)
+		statuses := []int{responses[0].Code, responses[1].Code}
+		assert.ElementsMatch(t, []int{http.StatusOK, http.StatusConflict}, statuses)
+		for _, response := range responses {
+			if response.Code == http.StatusOK {
+				assert.NotEmpty(t, response.Header().Get("Authorization"))
+				assert.Len(t, response.Header().Values("Set-Cookie"), 1)
+				continue
+			}
+			assert.Contains(t, response.Body.String(), authentication.MessageLoginTaken)
+			assert.Equal(t, "application/problem+json", response.Header().Get("Content-Type"))
+			assert.Empty(t, response.Header().Get("Authorization"))
+			assert.Empty(t, response.Header().Values("Set-Cookie"))
+		}
+
+		persisted := state.snapshot()
+		require.Len(t, persisted, 1)
+		assert.Equal(t, "concurrentuser", persisted[0].Login)
+		assert.NotEqual(t, "password", persisted[0].PasswordHash)
+	})
 }
 
 func TestRegisterFailuresDoNotPersistUserOrReturnToken(t *testing.T) {

@@ -26,16 +26,12 @@ type jwtClaims struct {
 type JWTManager struct {
 	secret []byte
 	parser *jwt.Parser
-	now    Clock
 }
 
 // NewJWTManager забирает копию ключа, чужие правки на неё не влияют.
-func NewJWTManager(secret []byte, now Clock) (*JWTManager, error) {
+func NewJWTManager(secret []byte) (*JWTManager, error) {
 	if len(secret) < SecretSize {
 		return nil, fmt.Errorf("JWT secret must be at least %d bytes", SecretSize)
-	}
-	if now == nil {
-		return nil, fmt.Errorf("JWT clock must not be nil")
 	}
 
 	return &JWTManager{
@@ -44,10 +40,8 @@ func NewJWTManager(secret []byte, now Clock) (*JWTManager, error) {
 			jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 			jwt.WithExpirationRequired(),
 			jwt.WithIssuedAt(),
-			jwt.WithTimeFunc(now),
 			jwt.WithLeeway(TokenLeeway),
 		),
-		now: now,
 	}, nil
 }
 
@@ -56,7 +50,7 @@ func (m *JWTManager) Issue(userID int64) (IssuedToken, error) {
 		return IssuedToken{}, fmt.Errorf("user ID must be positive")
 	}
 
-	issuedAt := m.now().UTC().Truncate(time.Second)
+	issuedAt := time.Now().UTC().Truncate(time.Second)
 	expiresAt := issuedAt.Add(TokenTTL)
 	claims := jwtClaims{
 		UserID: userID,

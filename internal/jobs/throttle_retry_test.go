@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -15,152 +16,153 @@ import (
 )
 
 func TestThrottle_RepeatsFailedPause(t *testing.T) {
-	queueErr := errors.New("pause")
-	queue := newPausedQueue(t, 2, 2)
-	queue.setPauseError(queueErr)
-	core, logs := observer.New(zap.ErrorLevel)
-	throttle, clock := newObservedThrottle(t, zap.New(core))
-	require.NoError(t, throttle.Attach(queue.controller))
+	synctest.Test(t, func(t *testing.T) {
+		queueErr := errors.New("pause")
+		queue := newPausedQueue(t, 2, 2)
+		queue.setPauseError(queueErr)
+		core, logs := observer.New(zap.ErrorLevel)
+		throttle := newDeterministicThrottle(t, zap.New(core), queue)
 
-	throttle.Pause(context.Background(), time.Minute)
-	waitThrottleValue(t, queue.pauseCalls)
-	// без повтора воркеры продолжали бы опрашивать расчёт весь срок отказа
-	waitForThrottleTimers(t, clock, 1)
-	assert.Equal(t, 1, logs.FilterMessage("Не удалось придержать опрос расчёта").Len())
+		throttle.Pause(context.Background(), time.Minute)
+		waitThrottleValue(t, queue.pauseCalls)
+		// без повтора воркеры продолжали бы опрашивать расчёт весь срок отказа
+		synctest.Wait()
+		assert.Equal(t, 1, logs.FilterMessage("Не удалось придержать опрос расчёта").Len())
 
-	queue.setPauseError(nil)
-	clock.Advance(retryDelay - time.Nanosecond)
-	requireNoThrottleValue(t, queue.pauseCalls)
-	clock.Advance(time.Nanosecond)
-	waitThrottleValue(t, queue.pauseCalls)
-	waitForThrottleTimers(t, clock, 1)
+		queue.setPauseError(nil)
+		waitThrottleValueAt(t, queue.pauseCalls, retryDelay)
+		synctest.Wait()
 
-	clock.Advance(time.Minute - retryDelay - time.Nanosecond)
-	requireNoThrottleValue(t, queue.resumeCalls)
-	clock.Advance(time.Nanosecond)
-	waitThrottleValue(t, queue.resumeCalls)
-	require.NoError(t, throttle.Stop(context.Background()))
+		waitThrottleValueAt(t, queue.resumeCalls, time.Minute-retryDelay)
+		require.NoError(t, throttle.Stop(context.Background()))
+	})
 }
 
 func TestThrottle_IgnoresStaleTimerEventBeforeRearmedPauseRetry(t *testing.T) {
-	queue := newPausedQueue(t, 3, 1)
-	queue.setPauseError(errors.New("pause"))
-	throttle, clock := newDeterministicThrottle(t, queue)
+	synctest.Test(t, func(t *testing.T) {
+		queue := newPausedQueue(t, 3, 1)
+		queue.setPauseError(errors.New("pause"))
+		throttle := newDeterministicThrottle(t, zap.NewNop(), queue)
 
-	throttle.Pause(context.Background(), time.Minute)
-	waitThrottleValue(t, queue.pauseCalls)
-	waitForThrottleTimers(t, clock, 1)
+		throttle.Pause(context.Background(), time.Minute)
+		waitThrottleValue(t, queue.pauseCalls)
+		synctest.Wait()
 
-	throttle.Pause(context.Background(), 2*time.Minute)
-	waitThrottleValue(t, queue.pauseCalls)
-	throttle.emit(throttleCommand{kind: throttleTimerFired})
-	requireNoThrottleValue(t, queue.pauseCalls)
-	requireNoThrottleValue(t, queue.resumeCalls)
+		throttle.Pause(context.Background(), 2*time.Minute)
+		waitThrottleValue(t, queue.pauseCalls)
+		throttle.emit(throttleCommand{kind: throttleTimerFired})
+		requireNoThrottleValue(t, queue.pauseCalls)
+		requireNoThrottleValue(t, queue.resumeCalls)
 
-	queue.setPauseError(nil)
-	clock.Advance(retryDelay - time.Nanosecond)
-	requireNoThrottleValue(t, queue.pauseCalls)
-	clock.Advance(time.Nanosecond)
-	waitThrottleValue(t, queue.pauseCalls)
-	require.NoError(t, throttle.Stop(context.Background()))
+		queue.setPauseError(nil)
+		waitThrottleValueAt(t, queue.pauseCalls, retryDelay)
+		require.NoError(t, throttle.Stop(context.Background()))
+	})
 }
 
 func TestThrottle_IgnoresDuplicateTimerEventDuringAutomaticResumeRetry(t *testing.T) {
-	resumeRelease := make(chan struct{})
-	var releaseOnce sync.Once
-	t.Cleanup(func() { releaseOnce.Do(func() { close(resumeRelease) }) })
-	queue := newPausedQueue(t, 1, 3)
-	queue.setResumeError(errors.New("resume"))
-	queue.setResumeBlock(resumeRelease)
-	throttle, clock := newDeterministicThrottle(t, queue)
+	synctest.Test(t, func(t *testing.T) {
+		resumeRelease := make(chan struct{})
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(resumeRelease) })
+		queue := newPausedQueue(t, 1, 3)
+		queue.setResumeError(errors.New("resume"))
+		queue.setResumeBlock(resumeRelease)
+		throttle := newDeterministicThrottle(t, zap.NewNop(), queue)
 
-	throttle.Pause(context.Background(), time.Minute)
-	waitThrottleValue(t, queue.pauseCalls)
-	waitForThrottleTimers(t, clock, 1)
-	clock.Advance(time.Minute)
-	waitThrottleValue(t, queue.resumeCalls)
-	throttle.emit(throttleCommand{kind: throttleTimerFired})
+		throttle.Pause(context.Background(), time.Minute)
+		waitThrottleValue(t, queue.pauseCalls)
+		synctest.Wait()
+		time.Sleep(time.Minute)
+		waitThrottleValue(t, queue.resumeCalls)
+		throttle.emit(throttleCommand{kind: throttleTimerFired})
 
-	releaseOnce.Do(func() { close(resumeRelease) })
-	waitForThrottleTimers(t, clock, 1)
-	requireNoThrottleValue(t, queue.resumeCalls)
+		releaseOnce.Do(func() { close(resumeRelease) })
+		synctest.Wait()
+		requireNoThrottleValue(t, queue.resumeCalls)
 
-	queue.setResumeError(nil)
-	clock.Advance(retryDelay - time.Nanosecond)
-	requireNoThrottleValue(t, queue.resumeCalls)
-	clock.Advance(time.Nanosecond)
-	waitThrottleValue(t, queue.resumeCalls)
-	require.NoError(t, throttle.Stop(context.Background()))
+		queue.setResumeError(nil)
+		waitThrottleValueAt(t, queue.resumeCalls, retryDelay)
+		require.NoError(t, throttle.Stop(context.Background()))
+	})
 }
 
 // Несостоявшуюся паузу снимать нечем: срок вышел, а очередь её не принимала.
 func TestThrottle_ForgetsDeadlineOfPauseQueueNeverAccepted(t *testing.T) {
-	queue := newPausedQueue(t, 1, 1)
-	queue.setPauseError(errors.New("pause"))
-	throttle, clock := newDeterministicThrottle(t, queue)
+	synctest.Test(t, func(t *testing.T) {
+		queue := newPausedQueue(t, 2, 1)
+		queue.setPauseError(errors.New("pause"))
+		throttle := newDeterministicThrottle(t, zap.NewNop(), queue)
 
-	throttle.Pause(context.Background(), time.Minute)
-	waitThrottleValue(t, queue.pauseCalls)
-	waitForThrottleTimers(t, clock, 1)
+		// срок переживает один повтор и обрывается на середине второго
+		throttle.Pause(context.Background(), retryDelay+retryDelay/2)
+		waitThrottleValue(t, queue.pauseCalls)
+		synctest.Wait()
 
-	clock.Advance(time.Minute)
+		time.Sleep(retryDelay)
+		waitThrottleValue(t, queue.pauseCalls)
+		synctest.Wait()
 
-	requireNoThrottleValue(t, queue.pauseCalls)
-	requireNoThrottleValue(t, queue.resumeCalls)
-	queue.setPauseError(nil)
-	require.NoError(t, throttle.Stop(context.Background()))
+		time.Sleep(retryDelay)
+
+		requireNoThrottleValue(t, queue.pauseCalls)
+		requireNoThrottleValue(t, queue.resumeCalls)
+		queue.setPauseError(nil)
+		require.NoError(t, throttle.Stop(context.Background()))
+	})
 }
 
 func TestThrottle_RepeatsAutomaticResumeAfterFailure(t *testing.T) {
-	queue := newPausedQueue(t, 1, 3)
-	queue.setResumeError(errors.New("resume"))
-	core, logs := observer.New(zap.ErrorLevel)
-	throttle, clock := newObservedThrottle(t, zap.New(core))
-	require.NoError(t, throttle.Attach(queue.controller))
-	throttle.Pause(context.Background(), time.Minute)
-	waitThrottleValue(t, queue.pauseCalls)
-	waitForThrottleTimers(t, clock, 1)
+	synctest.Test(t, func(t *testing.T) {
+		queue := newPausedQueue(t, 1, 3)
+		queue.setResumeError(errors.New("resume"))
+		core, logs := observer.New(zap.ErrorLevel)
+		throttle := newDeterministicThrottle(t, zap.New(core), queue)
+		throttle.Pause(context.Background(), time.Minute)
+		waitThrottleValue(t, queue.pauseCalls)
+		synctest.Wait()
 
-	clock.Advance(time.Minute)
-	waitThrottleValue(t, queue.resumeCalls)
+		time.Sleep(time.Minute)
+		waitThrottleValue(t, queue.resumeCalls)
 
-	// приостановленная очередь не запустит воркер, и позвать Pause
-	// со свежим сроком станет некому
-	waitForThrottleTimers(t, clock, 1)
-	assert.Equal(t, 1, logs.Len())
+		// приостановленная очередь не запустит воркер, и позвать Pause
+		// со свежим сроком станет некому
+		synctest.Wait()
+		assert.Equal(t, 1, logs.Len())
 
-	queue.setResumeError(nil)
-	clock.Advance(retryDelay - time.Nanosecond)
-	requireNoThrottleValue(t, queue.resumeCalls)
-	clock.Advance(time.Nanosecond)
-	waitThrottleValue(t, queue.resumeCalls)
-	require.NoError(t, throttle.Stop(context.Background()))
+		queue.setResumeError(nil)
+		waitThrottleValueAt(t, queue.resumeCalls, retryDelay)
+		require.NoError(t, throttle.Stop(context.Background()))
+	})
 }
 
 func TestThrottle_ResumeReturnsFailureToCaller(t *testing.T) {
-	resumeErr := errors.New("resume")
-	queue := newPausedQueue(t, 0, 2)
-	queue.setResumeError(resumeErr)
-	throttle, _ := newDeterministicThrottle(t, queue)
+	synctest.Test(t, func(t *testing.T) {
+		resumeErr := errors.New("resume")
+		queue := newPausedQueue(t, 0, 2)
+		queue.setResumeError(resumeErr)
+		throttle := newDeterministicThrottle(t, zap.NewNop(), queue)
 
-	err := throttle.Resume(context.Background())
+		err := throttle.Resume(context.Background())
 
-	require.ErrorIs(t, err, resumeErr)
-	waitThrottleValue(t, queue.resumeCalls)
-	queue.setResumeError(nil)
-	require.NoError(t, throttle.Stop(context.Background()))
+		require.ErrorIs(t, err, resumeErr)
+		waitThrottleValue(t, queue.resumeCalls)
+		queue.setResumeError(nil)
+		require.NoError(t, throttle.Stop(context.Background()))
+	})
 }
 
 func TestThrottle_ResumeTreatsMissingNewQueueAsAlreadyResumed(t *testing.T) {
-	queue := newPausedQueue(t, 0, 2)
-	queue.resumeErr = river.ErrNotFound
-	core, logs := observer.New(zap.ErrorLevel)
-	throttle := NewThrottle(zap.New(core), "orders", time.Now)
-	require.NoError(t, throttle.Attach(queue.controller))
+	synctest.Test(t, func(t *testing.T) {
+		queue := newPausedQueue(t, 0, 2)
+		queue.resumeErr = river.ErrNotFound
+		core, logs := observer.New(zap.ErrorLevel)
+		throttle := newDeterministicThrottle(t, zap.New(core), queue)
 
-	require.NoError(t, throttle.Resume(context.Background()))
-	assert.Zero(t, logs.Len())
+		require.NoError(t, throttle.Resume(context.Background()))
+		assert.Zero(t, logs.Len())
 
-	queue.resumeErr = nil
-	require.NoError(t, throttle.Stop(context.Background()))
+		queue.resumeErr = nil
+		require.NoError(t, throttle.Stop(context.Background()))
+	})
 }

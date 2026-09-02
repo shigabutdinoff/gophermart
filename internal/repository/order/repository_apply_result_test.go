@@ -17,16 +17,16 @@ import (
 )
 
 func TestRepository_ApplyResultWritesIntermediateOrderInOneStatement(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
+	session, gormDB := testkit.NewDryRunSession(t)
 	var query string
 	var variables []any
-	applyResultUpdate(t, gormDB, "test:observe-apply-result", 1, domain.StatusProcessing, func(tx *gorm.DB) {
+	applyResultUpdate(t, gormDB, 1, domain.StatusProcessing, func(tx *gorm.DB) {
 		query = tx.Statement.SQL.String()
 		variables = slices.Clone(tx.Statement.Vars)
 	})
 	accrued := money.Points(50050)
 
-	finished, err := New(gormDB).ApplyResult(
+	finished, err := New(session).ApplyResult(
 		context.Background(),
 		"12345678903",
 		domain.StatusProcessing,
@@ -60,10 +60,10 @@ func TestRepository_ApplyResultWritesIntermediateOrderInOneStatement(t *testing.
 func TestRepository_ApplyResultReportsFinishedOrder(t *testing.T) {
 	for _, status := range domain.FinalStatuses() {
 		t.Run(string(status), func(t *testing.T) {
-			gormDB := testkit.NewDryRunDB(t)
-			applyResultUpdate(t, gormDB, "test:observe-final-apply-result", 1, status, nil)
+			session, gormDB := testkit.NewDryRunSession(t)
+			applyResultUpdate(t, gormDB, 1, status, nil)
 
-			finished, err := New(gormDB).ApplyResult(
+			finished, err := New(session).ApplyResult(
 				context.Background(),
 				"12345678903",
 				status,
@@ -79,11 +79,11 @@ func TestRepository_ApplyResultReportsFinishedOrder(t *testing.T) {
 // Запись завершённого заказа выдаёт себя ответом: строка вернула прежний
 // окончательный статус, а не тот, который в неё пытались записать.
 func TestRepository_ApplyResultKeepsOrderClosedByAnotherAttempt(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
-	applyResultUpdate(t, gormDB, "test:apply-result-hits-closed-order", 1, domain.StatusInvalid, nil)
+	session, gormDB := testkit.NewDryRunSession(t)
+	applyResultUpdate(t, gormDB, 1, domain.StatusInvalid, nil)
 	accrued := money.Points(50050)
 
-	finished, err := New(gormDB).ApplyResult(
+	finished, err := New(session).ApplyResult(
 		context.Background(),
 		"12345678903",
 		domain.StatusProcessing,
@@ -95,10 +95,10 @@ func TestRepository_ApplyResultKeepsOrderClosedByAnotherAttempt(t *testing.T) {
 }
 
 func TestRepository_ApplyResultReportsVanishedOrder(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
-	applyResultUpdate(t, gormDB, "test:apply-result-misses-order", 0, "", nil)
+	session, gormDB := testkit.NewDryRunSession(t)
+	applyResultUpdate(t, gormDB, 0, "", nil)
 
-	finished, err := New(gormDB).ApplyResult(
+	finished, err := New(session).ApplyResult(
 		context.Background(),
 		"12345678903",
 		domain.StatusProcessing,
@@ -113,13 +113,13 @@ func TestRepository_ApplyResultReportsVanishedOrder(t *testing.T) {
 
 func TestRepository_ApplyResultReportsWriteError(t *testing.T) {
 	storageErr := errors.New("storage")
-	gormDB := testkit.NewDryRunDB(t)
+	session, gormDB := testkit.NewDryRunSession(t)
 	require.NoError(t, gormDB.Callback().Update().After("gorm:update").Register(
 		"test:failing-apply-result",
 		func(tx *gorm.DB) { tx.AddError(storageErr) },
 	))
 
-	finished, err := New(gormDB).ApplyResult(
+	finished, err := New(session).ApplyResult(
 		context.Background(),
 		"12345678903",
 		domain.StatusProcessing,
@@ -132,7 +132,7 @@ func TestRepository_ApplyResultReportsWriteError(t *testing.T) {
 }
 
 func TestRepository_ApplyResultWithoutDatabaseIsControlled(t *testing.T) {
-	finished, err := New(nil).ApplyResult(
+	finished, err := New(database.Session{}).ApplyResult(
 		context.Background(),
 		"12345678903",
 		domain.StatusProcessed,

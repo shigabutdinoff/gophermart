@@ -1,8 +1,6 @@
 package server
 
 import (
-	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,41 +20,6 @@ func newTestServer(t *testing.T, logger *zap.Logger, cfg config.Config) (*Server
 	srv := httptest.NewServer(s.router)
 	t.Cleanup(srv.Close)
 	return s, srv
-}
-
-// readBody читает тело и отвечает статусом по ошибке, как обработчики
-func readBody(w http.ResponseWriter, r *http.Request) bool {
-	if _, err := io.ReadAll(r.Body); err != nil {
-		status := http.StatusBadRequest
-		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			status = http.StatusRequestEntityTooLarge
-		}
-		http.Error(w, http.StatusText(status), status)
-		return false
-	}
-	return true
-}
-
-// echoServer поднимает сервер с маршрутом /echo, читающим тело как обработчики
-type echoServer struct {
-	*Server
-	http   *httptest.Server
-	called bool
-}
-
-func newEchoServer(t *testing.T) *echoServer {
-	t.Helper()
-
-	server, httpServer := newTestServer(t, zap.NewNop(), config.Default())
-	echo := &echoServer{Server: server, http: httpServer}
-	server.router.Post("/echo", func(w http.ResponseWriter, req *http.Request) {
-		echo.called = true
-		if !readBody(w, req) {
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-	return echo
 }
 
 func TestRouter_PanicAnswersInternalError(t *testing.T) {

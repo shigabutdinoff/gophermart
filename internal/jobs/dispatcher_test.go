@@ -10,31 +10,43 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
-
-	jobsmocks "github.com/shigabutdinoff/gophermart/internal/jobs/mocks"
 )
 
-func newMockDB(t *testing.T) (*gorm.DB, sqlmock.Sqlmock) {
+// fakeInserter заменяет сгенерённый мок: разбирая аргументы, testify читает
+// поля *sql.Tx рефлексией, а их дописывает фоновая горутина database/sql.
+type fakeInserter struct {
+	ctx    context.Context
+	tx     *sql.Tx
+	args   river.JobArgs
+	opts   *river.InsertOpts
+	calls  int
+	result *rivertype.JobInsertResult
+	err    error
+}
+
+func (f *fakeInserter) InsertTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	args river.JobArgs,
+	opts *river.InsertOpts,
+) (*rivertype.JobInsertResult, error) {
+	f.calls++
+	f.ctx = ctx
+	f.tx = tx
+	f.args = args
+	f.opts = opts
+
+	return f.result, f.err
+}
+
+func newMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
 	sqlDB, sqlMock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	gormDB, err := gorm.Open(
-		postgres.New(postgres.Config{Conn: sqlDB, PreferSimpleProtocol: true}),
-		&gorm.Config{
-			DisableAutomaticPing: true,
-			Logger:               gormlogger.Default.LogMode(gormlogger.Silent),
-		},
-	)
-	require.NoError(t, err)
-
-	return gormDB, sqlMock
+	return sqlDB, sqlMock
 }
 
 func TestCheckAccrualArgs_NamesJobInQueue(t *testing.T) {
@@ -48,78 +60,44 @@ func expectedInsertOptions() *river.InsertOpts {
 	}
 }
 
-func assertAndForgetTransactionCall(
-	t *testing.T,
-	queue *jobsmocks.MockInserter,
-	call *mock.Call,
-) {
-	t.Helper()
-	require.True(t, queue.AssertExpectations(t))
-	call.Unset()
-}
-
 func TestDispatcher_PushesJobWithinOrderTransaction(t *testing.T) {
-	gormDB, sqlMock := newMockDB(t)
+	sqlDB, sqlMock := newMockDB(t)
 	sqlMock.ExpectBegin()
 	sqlMock.ExpectCommit()
-	queue := jobsmocks.NewMockInserter(t)
-	ctx := context.Background()
-	var orderTx *sql.Tx
-
-	err := gormDB.Transaction(func(tx *gorm.DB) error {
-		orderTx, _ = tx.Statement.ConnPool.(*sql.Tx)
-		insertCall := queue.EXPECT().InsertTx(
-			ctx,
-			orderTx,
-			CheckAccrualArgs{Number: "12345678903"},
-			expectedInsertOptions(),
-		).Return(&rivertype.JobInsertResult{}, nil).Once()
-		dispatcher := NewDispatcher(queue, "orders")
-
-		pushErr := dispatcher.Push(ctx, tx, "12345678903")
-		assertAndForgetTransactionCall(t, queue, insertCall)
-
-		return pushErr
-	})
-
+	ctx := t.Context()
+	tx, err := sqlDB.BeginTx(ctx, nil)
 	require.NoError(t, err)
+
+	queue := &fakeInserter{result: &rivertype.JobInsertResult{}}
+
+	require.NoError(t, NewDispatcher(queue, "orders").Push(ctx, tx, "12345678903"))
+
+	assert.Equal(t, 1, queue.calls)
+	assert.Equal(t, ctx, queue.ctx, "задание ставится контекстом загрузки заказа")
+	assert.Same(t, tx, queue.tx, "задание ставится транзакцией заказа")
+	assert.Equal(t, CheckAccrualArgs{Number: "12345678903"}, queue.args)
+	assert.Equal(t, expectedInsertOptions(), queue.opts)
+	require.NoError(t, tx.Commit())
 	require.NoError(t, sqlMock.ExpectationsWereMet())
-}
-
-func TestDispatcher_RefusesOutsideTransaction(t *testing.T) {
-	gormDB, _ := newMockDB(t)
-	queue := jobsmocks.NewMockInserter(t)
-
-	err := NewDispatcher(queue, "orders").Push(context.Background(), gormDB, "12345678903")
-
-	require.ErrorIs(t, err, errOutsideTransaction)
 }
 
 func TestDispatcher_KeepsQueueError(t *testing.T) {
 	queueErr := errors.New("queue")
-	gormDB, sqlMock := newMockDB(t)
+	sqlDB, sqlMock := newMockDB(t)
 	sqlMock.ExpectBegin()
 	sqlMock.ExpectRollback()
+	ctx := context.Background()
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
 
-	err := gormDB.Transaction(func(tx *gorm.DB) error {
-		queue := jobsmocks.NewMockInserter(t)
-		ctx := context.Background()
-		orderTx, _ := tx.Statement.ConnPool.(*sql.Tx)
-		insertCall := queue.EXPECT().InsertTx(
-			ctx,
-			orderTx,
-			CheckAccrualArgs{Number: "12345678903"},
-			expectedInsertOptions(),
-		).Return(nil, queueErr).Once()
-		dispatcher := NewDispatcher(queue, "orders")
+	queue := &fakeInserter{err: queueErr}
 
-		pushErr := dispatcher.Push(ctx, tx, "12345678903")
-		assertAndForgetTransactionCall(t, queue, insertCall)
+	pushErr := NewDispatcher(queue, "orders").Push(ctx, tx, "12345678903")
 
-		return pushErr
-	})
-
-	require.ErrorIs(t, err, queueErr)
-	assert.ErrorContains(t, err, "dispatch check_accrual")
+	require.ErrorIs(t, pushErr, queueErr)
+	assert.Equal(t, 1, queue.calls)
+	assert.Same(t, tx, queue.tx, "задание ставится транзакцией заказа")
+	assert.ErrorContains(t, pushErr, "dispatch check_accrual")
+	require.NoError(t, tx.Rollback())
 	require.NoError(t, sqlMock.ExpectationsWereMet())
 }

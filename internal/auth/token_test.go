@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -15,36 +16,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var jwtTestNow = time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
-
 func TestJWTManagerIssueAndVerify(t *testing.T) {
-	manager := newJWTTestManager(t, jwtTestSecret())
+	synctest.Test(t, func(t *testing.T) {
+		manager := newJWTTestManager(t, jwtTestSecret())
+		now := time.Now()
 
-	issued, err := manager.Issue(42)
-	require.NoError(t, err)
-	require.NotEmpty(t, issued.Value)
-	assert.WithinDuration(t, jwtTestNow, issued.IssuedAt, 0)
-	assert.WithinDuration(t, jwtTestNow.Add(time.Hour), issued.ExpiresAt, 0)
+		issued, err := manager.Issue(42)
+		require.NoError(t, err)
+		require.NotEmpty(t, issued.Value)
+		assert.WithinDuration(t, now, issued.IssuedAt, 0)
+		assert.WithinDuration(t, now.Add(time.Hour), issued.ExpiresAt, 0)
 
-	userID, err := verifyJWTTestToken(manager, issued.Value)
-	require.NoError(t, err)
-	assert.Equal(t, int64(42), userID)
+		userID, err := verifyJWTTestToken(manager, issued.Value)
+		require.NoError(t, err)
+		assert.Equal(t, int64(42), userID)
 
-	parsed, _, err := jwt.NewParser().ParseUnverified(issued.Value, jwt.MapClaims{})
-	require.NoError(t, err)
-	assert.Equal(t, jwt.SigningMethodHS256.Alg(), parsed.Method.Alg())
+		parsed, _, err := jwt.NewParser().ParseUnverified(issued.Value, jwt.MapClaims{})
+		require.NoError(t, err)
+		assert.Equal(t, jwt.SigningMethodHS256.Alg(), parsed.Method.Alg())
 
-	claims := jwt.MapClaims{}
-	_, _, err = jwt.NewParser().ParseUnverified(issued.Value, claims)
-	require.NoError(t, err)
-	issuedAt, err := claims.GetIssuedAt()
-	require.NoError(t, err)
-	require.NotNil(t, issuedAt)
-	assert.WithinDuration(t, jwtTestNow, issuedAt.Time, 0)
-	expiration, err := claims.GetExpirationTime()
-	require.NoError(t, err)
-	require.NotNil(t, expiration)
-	assert.WithinDuration(t, jwtTestNow.Add(time.Hour), expiration.Time, 0)
+		claims := jwt.MapClaims{}
+		_, _, err = jwt.NewParser().ParseUnverified(issued.Value, claims)
+		require.NoError(t, err)
+		issuedAt, err := claims.GetIssuedAt()
+		require.NoError(t, err)
+		require.NotNil(t, issuedAt)
+		assert.WithinDuration(t, now, issuedAt.Time, 0)
+		expiration, err := claims.GetExpirationTime()
+		require.NoError(t, err)
+		require.NotNil(t, expiration)
+		assert.WithinDuration(t, now.Add(time.Hour), expiration.Time, 0)
+	})
 }
 
 func TestJWTManagerIssueRejectsNonPositiveUserID(t *testing.T) {
@@ -58,16 +60,9 @@ func TestJWTManagerIssueRejectsNonPositiveUserID(t *testing.T) {
 	}
 }
 
-func TestJWTManagerRejectsInvalidConfiguration(t *testing.T) {
-	t.Run("short secret", func(t *testing.T) {
-		_, err := NewJWTManager([]byte("short"), jwtTestClock)
-		require.Error(t, err)
-	})
-
-	t.Run("nil clock", func(t *testing.T) {
-		_, err := NewJWTManager(jwtTestSecret(), nil)
-		require.Error(t, err)
-	})
+func TestJWTManagerRejectsShortSecret(t *testing.T) {
+	_, err := NewJWTManager([]byte("short"))
+	require.Error(t, err)
 }
 
 func TestJWTManagerCopiesSecret(t *testing.T) {
@@ -92,21 +87,24 @@ func TestJWTManagerAppliesLeewayToIssuedAt(t *testing.T) {
 		{"at sixty seconds", time.Minute, false},
 		{"after sixty seconds", time.Minute + time.Second, true},
 	}
-	manager := newJWTTestManager(t, jwtTestSecret())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			token := signJWTTestToken(t, jwtTestSecret(), map[string]any{
-				UserIDClaim: int64(7),
-				"iat":       jwtTestNow.Add(tt.offset).Unix(),
-				"exp":       jwtTestNow.Add(5 * time.Minute).Unix(),
-			})
+			synctest.Test(t, func(t *testing.T) {
+				manager := newJWTTestManager(t, jwtTestSecret())
+				now := time.Now()
+				token := signJWTTestToken(t, jwtTestSecret(), map[string]any{
+					UserIDClaim: int64(7),
+					"iat":       now.Add(tt.offset).Unix(),
+					"exp":       now.Add(5 * time.Minute).Unix(),
+				})
 
-			_, err := verifyJWTTestToken(manager, token)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
+				_, err := verifyJWTTestToken(manager, token)
+				if tt.wantErr {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+			})
 		})
 	}
 }
@@ -120,31 +118,35 @@ func TestJWTManagerAppliesLeewayToExpiration(t *testing.T) {
 		{"expired fifty nine seconds ago", -59 * time.Second, false},
 		{"expired sixty seconds ago", -time.Minute, true},
 	}
-	manager := newJWTTestManager(t, jwtTestSecret())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			token := signJWTTestToken(t, jwtTestSecret(), map[string]any{
-				UserIDClaim: int64(7),
-				"iat":       jwtTestNow.Add(-time.Hour).Unix(),
-				"exp":       jwtTestNow.Add(tt.offset).Unix(),
-			})
+			synctest.Test(t, func(t *testing.T) {
+				manager := newJWTTestManager(t, jwtTestSecret())
+				now := time.Now()
+				token := signJWTTestToken(t, jwtTestSecret(), map[string]any{
+					UserIDClaim: int64(7),
+					"iat":       now.Add(-time.Hour).Unix(),
+					"exp":       now.Add(tt.offset).Unix(),
+				})
 
-			_, err := verifyJWTTestToken(manager, token)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
+				_, err := verifyJWTTestToken(manager, token)
+				if tt.wantErr {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+			})
 		})
 	}
 }
 
 func TestJWTManagerDoesNotRequireIssuedTTL(t *testing.T) {
 	manager := newJWTTestManager(t, jwtTestSecret())
+	now := time.Now()
 	token := signJWTTestToken(t, jwtTestSecret(), map[string]any{
 		UserIDClaim: int64(7),
-		"iat":       jwtTestNow.Add(-2 * time.Hour).Unix(),
-		"exp":       jwtTestNow.Add(30 * time.Second).Unix(),
+		"iat":       now.Add(-2 * time.Hour).Unix(),
+		"exp":       now.Add(30 * time.Second).Unix(),
 	})
 
 	userID, err := verifyJWTTestToken(manager, token)
@@ -231,14 +233,10 @@ func verifyJWTTestToken(manager *JWTManager, token string) (int64, error) {
 func newJWTTestManager(t *testing.T, secret []byte) *JWTManager {
 	t.Helper()
 
-	manager, err := NewJWTManager(secret, jwtTestClock)
+	manager, err := NewJWTManager(secret)
 	require.NoError(t, err)
 
 	return manager
-}
-
-func jwtTestClock() time.Time {
-	return jwtTestNow
 }
 
 func jwtTestSecret() []byte {
@@ -246,10 +244,12 @@ func jwtTestSecret() []byte {
 }
 
 func validJWTTestClaims() map[string]any {
+	now := time.Now()
+
 	return map[string]any{
 		UserIDClaim: int64(7),
-		"iat":       jwtTestNow.Unix(),
-		"exp":       jwtTestNow.Add(5 * time.Minute).Unix(),
+		"iat":       now.Unix(),
+		"exp":       now.Add(5 * time.Minute).Unix(),
 	}
 }
 

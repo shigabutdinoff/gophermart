@@ -5,10 +5,10 @@ import (
 	"fmt"
 )
 
-// SecretSize is the size in bytes of a generated or configured secret
+// SecretSize задаёт длину секрета в байтах
 const SecretSize = 32
 
-// ResolveSecret returns a copy of configured or generates a new process secret.
+// ResolveSecret отдаёт копию заданного секрета либо заводит новый на процесс.
 func ResolveSecret(configured string) ([]byte, error) {
 	if configured != "" {
 		if len(configured) < SecretSize {

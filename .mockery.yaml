@@ -13,14 +13,11 @@ template: testify
 packages:
   github.com/shigabutdinoff/gophermart/internal/order:
     interfaces:
-      Creator:
-      Lister:
       ResultWriter:
   github.com/shigabutdinoff/gophermart/internal/balance:
     interfaces:
       Reader:
       WithdrawalLister:
-      Withdrawer:
   github.com/shigabutdinoff/gophermart/internal/auth:
     interfaces:
       PasswordHasher:
@@ -31,19 +28,9 @@ packages:
   github.com/shigabutdinoff/gophermart/internal/jobs:
     interfaces:
       AccrualClient:
-      Inserter:
       QueueController:
       Throttler:
   github.com/shigabutdinoff/gophermart/internal/server:
     interfaces:
-      queueThrottle:
       riverLifecycle:
       throttleLifecycle:
-  github.com/shigabutdinoff/gophermart/internal/repository/order:
-    interfaces:
-      Pusher:
-        configs:
-          - dir: "{{.InterfaceDir}}"
-            filename: mock_pusher_test.go
-            pkgname: order
-          - {}

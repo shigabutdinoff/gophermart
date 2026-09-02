@@ -3,41 +3,33 @@ package server
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/shigabutdinoff/gophermart/internal/auth"
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 	ordersroute "github.com/shigabutdinoff/gophermart/internal/handlers/route/orders"
 	"github.com/shigabutdinoff/gophermart/internal/order"
+	"github.com/shigabutdinoff/gophermart/internal/repository/database"
+	"github.com/shigabutdinoff/gophermart/internal/repository/testkit"
 )
 
 func TestIndependentSecretsAreIsolatedOnProtectedOrderRoute(t *testing.T) {
 	const firstSecret = "0123456789abcdef0123456789abcdef"
-	now := func() time.Time {
-		return time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	}
-	firstTokens, err := auth.NewJWTManager([]byte(firstSecret), now)
+	firstTokens, err := auth.NewJWTManager([]byte(firstSecret))
 	require.NoError(t, err)
 	secondTokens, err := auth.NewJWTManager(
 		[]byte(strings.Repeat("a", len(firstSecret))),
-		now,
 	)
 	require.NoError(t, err)
 	issued, err := firstTokens.Issue(42)
@@ -53,7 +45,6 @@ func TestIndependentSecretsAreIsolatedOnProtectedOrderRoute(t *testing.T) {
 				return nil, nil
 			}},
 		},
-		Config: config.Default(),
 	}
 	first.setupRoutes()
 	secondCalls := 0
@@ -66,7 +57,6 @@ func TestIndependentSecretsAreIsolatedOnProtectedOrderRoute(t *testing.T) {
 				return nil, nil
 			}},
 		},
-		Config: config.Default(),
 	}
 	second.setupRoutes()
 
@@ -88,20 +78,10 @@ func TestRouterMissingAuthSchemaAfterMigrationFailureReturnsControlledError(t *t
 	core, logs := observer.New(zap.InfoLevel)
 	cfg := config.Default()
 	cfg.DatabaseURI = "postgresql://user:password@database/gophermart"
-	gormDB, sqlDB, _ := newControllableDatabase(t, true, false)
-	require.NoError(t, gormDB.Callback().Create().Before("gorm:create").Register(
-		"test:missing-users-table",
-		func(tx *gorm.DB) {
-			tx.AddError(missingUsersTableError())
-		},
-	))
-	require.NoError(t, gormDB.Callback().Query().Before("gorm:query").Register(
-		"test:query-missing-users-table",
-		func(tx *gorm.DB) {
-			tx.AddError(missingUsersTableError())
-		},
-	))
-	server, err := newServer(zap.New(core), cfg, time.Now, gormDB, sqlDB)
+	sqlDB, _ := newPingMock(t, nil)
+	gormDB := testkit.OpenDryRunGORM(t, sqlDB)
+	testkit.FailStatements(t, gormDB, missingUsersTableError())
+	server, err := newServer(zap.New(core), cfg, database.NewSession(gormDB), sqlDB)
 	require.NoError(t, err)
 	t.Cleanup(server.closeDatabase)
 	migrationErr := errors.New("migration failed")
@@ -123,6 +103,13 @@ func TestRouterMissingAuthSchemaAfterMigrationFailureReturnsControlledError(t *t
 			assertLifecycleResponse(t, response, http.StatusInternalServerError)
 		})
 	}
+
+	// оба маршрута доносят до лога именно отсутствующую таблицу
+	assert.Equal(t, 2, logs.Filter(func(entry observer.LoggedEntry) bool {
+		reason, ok := entry.ContextMap()["error"].(string)
+
+		return ok && strings.Contains(reason, `relation "users" does not exist`)
+	}).Len())
 }
 
 func serveLifecycleRequest(
@@ -162,90 +149,6 @@ func assertLifecycleResponse(
 	assert.NotEmpty(t, problem.Detail)
 	assert.Empty(t, response.Header().Get("Authorization"))
 	assert.Empty(t, response.Header().Values("Set-Cookie"))
-}
-
-type controllableConnector struct {
-	available atomic.Bool
-}
-
-func (c *controllableConnector) Connect(context.Context) (driver.Conn, error) {
-	return &controllableConnection{availability: &c.available}, nil
-}
-
-func (*controllableConnector) Driver() driver.Driver {
-	return controllableDriver{}
-}
-
-// Драйвер нужен интерфейсу коннектора, соединения выдаёт только Connect.
-type controllableDriver struct{}
-
-func (controllableDriver) Open(string) (driver.Conn, error) {
-	return nil, errors.New("connections come from Connect")
-}
-
-type controllableConnection struct {
-	availability *atomic.Bool
-}
-
-func (*controllableConnection) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("query is not supported")
-}
-
-func (*controllableConnection) Close() error { return nil }
-
-func (*controllableConnection) Begin() (driver.Tx, error) {
-	return nil, errors.New("transaction is not supported")
-}
-
-func (c *controllableConnection) Ping(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if !c.availability.Load() {
-		return errors.New("database is unavailable")
-	}
-	return nil
-}
-
-func newControllableDatabase(
-	t *testing.T,
-	available bool,
-	dryRun bool,
-) (*gorm.DB, *sql.DB, *atomic.Bool) {
-	t.Helper()
-	connector := &controllableConnector{}
-	connector.available.Store(available)
-	sqlDB := sql.OpenDB(connector)
-	gormDB, err := gorm.Open(
-		postgres.New(postgres.Config{Conn: sqlDB, PreferSimpleProtocol: true}),
-		&gorm.Config{
-			DisableAutomaticPing: true,
-			DryRun:               dryRun,
-			Logger:               gormlogger.Default.LogMode(gormlogger.Silent),
-			// как в database.Connection, иначе дубль логина не станет ErrDuplicatedKey
-			TranslateError:         true,
-			SkipDefaultTransaction: true,
-		},
-	)
-	require.NoError(t, err)
-	return gormDB, sqlDB, &connector.available
-}
-
-// registerMissingUserQuery заставляет поиск пользователя отвечать «не найден».
-// В DryRun запрос не выполняется, поэтому иначе поиск считался бы успешным.
-func registerMissingUserQuery(t *testing.T, gormDB *gorm.DB, availability *atomic.Bool) {
-	t.Helper()
-
-	require.NoError(t, gormDB.Callback().Query().Before("gorm:query").Register(
-		"test:query-missing-user",
-		func(tx *gorm.DB) {
-			if availability != nil && !availability.Load() {
-				tx.AddError(errors.New("database is unavailable"))
-				return
-			}
-			tx.AddError(gorm.ErrRecordNotFound)
-		},
-	))
 }
 
 func missingUsersTableError() error {

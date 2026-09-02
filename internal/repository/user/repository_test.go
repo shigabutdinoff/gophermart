@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +16,7 @@ import (
 )
 
 func TestRepository_MissingCurrentDatabaseIsControlled(t *testing.T) {
-	repository := New(nil)
+	repository := New(database.Session{})
 
 	_, createErr := repository.Create(context.Background(), "user", "hash")
 	_, findErr := repository.FindByLogin(context.Background(), "user")
@@ -27,23 +26,17 @@ func TestRepository_MissingCurrentDatabaseIsControlled(t *testing.T) {
 }
 
 func TestRepository_CreateUsesCurrentDatabaseAndContext(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
+	session, gormDB := testkit.NewDryRunSession(t)
 	ctx := context.WithValue(context.Background(), repositoryContextKey{}, "value")
-	var operationContext context.Context
-	var destination *userRow
-	require.NoError(t, gormDB.Callback().Create().Before("gorm:create").Register(
-		"test:observe-create",
-		func(tx *gorm.DB) {
-			operationContext = tx.Statement.Context
-			destination, _ = tx.Statement.Dest.(*userRow)
-		},
-	))
+	observed := testkit.ObserveStatements(t, gormDB)
 
-	created, err := New(gormDB).Create(ctx, "normalized", "password-hash")
+	created, err := New(session).Create(ctx, "normalized", "password-hash")
 
 	require.NoError(t, err)
-	assert.Same(t, ctx, operationContext)
-	require.NotNil(t, destination)
+	statement := observed()
+	assert.Same(t, ctx, statement.Context)
+	destination, ok := statement.Dest.(*userRow)
+	require.True(t, ok)
 	assert.Equal(t, "normalized", destination.Login)
 	assert.Equal(t, "password-hash", destination.PasswordHash)
 	assert.Equal(t, "normalized", created.Login)
@@ -51,31 +44,20 @@ func TestRepository_CreateUsesCurrentDatabaseAndContext(t *testing.T) {
 }
 
 func TestRepository_FindByLoginUsesCurrentDatabaseAndContext(t *testing.T) {
-	gormDB := testkit.NewDryRunDB(t)
+	session, gormDB := testkit.NewDryRunSession(t)
 	ctx := context.WithValue(context.Background(), repositoryContextKey{}, "value")
-	var operationContext context.Context
-	var query string
-	var variables []any
-	var destination *userRow
-	require.NoError(t, gormDB.Callback().Query().After("gorm:query").Register(
-		"test:observe-query",
-		func(tx *gorm.DB) {
-			operationContext = tx.Statement.Context
-			query = tx.Statement.SQL.String()
-			variables = slices.Clone(tx.Statement.Vars)
-			destination, _ = tx.Statement.Dest.(*userRow)
-			tx.AddError(gorm.ErrRecordNotFound)
-		},
-	))
+	observed := testkit.ObserveStatements(t, gormDB)
+	testkit.SetQueryResult(gormDB, []userRow(nil), gorm.ErrRecordNotFound)
 
-	_, err := New(gormDB).FindByLogin(ctx, "normalized")
+	_, err := New(session).FindByLogin(ctx, "normalized")
 
 	require.ErrorIs(t, err, auth.ErrUserNotFound)
-	assert.Same(t, ctx, operationContext)
-	require.NotNil(t, destination)
-	assert.Contains(t, query, `FROM "users"`)
-	assert.Contains(t, query, `WHERE login = $1`)
-	assert.Equal(t, []any{"normalized", 1}, variables)
+	statement := observed()
+	assert.Same(t, ctx, statement.Context)
+	assert.IsType(t, &userRow{}, statement.Dest)
+	assert.Contains(t, statement.SQL, `FROM "users"`)
+	assert.Contains(t, statement.SQL, `WHERE login = $1`)
+	assert.Equal(t, []any{"normalized", 1}, statement.Variables)
 }
 
 func TestUserRowDeclaresColumnsOfUsersTable(t *testing.T) {
@@ -109,13 +91,11 @@ func TestRepository_CreateMapsStorageError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gormDB := testkit.NewDryRunDB(t)
-			require.NoError(t, gormDB.Callback().Create().Before("gorm:create").Register(
-				"test:create-error",
-				func(tx *gorm.DB) { tx.AddError(tt.storageErr) },
-			))
+			session, gormDB := testkit.NewDryRunSession(t)
+			testkit.SetCreateResult(gormDB, 0, tt.storageErr)
 
-			_, err := New(gormDB).Create(context.Background(), "normalized", "password-hash")
+			_, err := New(session).
+				Create(context.Background(), "normalized", "password-hash")
 
 			assert.ErrorIs(t, err, tt.wantErr)
 		})

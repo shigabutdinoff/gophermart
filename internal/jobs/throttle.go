@@ -30,12 +30,6 @@ type Throttler interface {
 	Pause(ctx context.Context, pause time.Duration)
 }
 
-// timerHandle прячет таймер за интерфейсом, чтобы тесты вели срок сами.
-type timerHandle interface {
-	Stop() bool
-	Reset(time.Duration) bool
-}
-
 type throttleCommandKind uint8
 
 const (
@@ -55,13 +49,6 @@ const (
 	throttleAutomaticResume
 )
 
-type throttleLoopEvent uint8
-
-const (
-	throttleLoopStarted throttleLoopEvent = iota
-	throttleLoopTerminated
-)
-
 type throttleStopCompletion struct {
 	ready chan struct{}
 	err   error
@@ -77,8 +64,7 @@ func (c *throttleStopCompletion) resolve(err error) {
 }
 
 func (c *throttleStopCompletion) wait() error {
-	// Closing ready publishes the immutable outcome to every current and future
-	// waiter with an explicit happens-before edge.
+	// закрытие ready отдаёт готовый исход всем ждущим, нынешним и будущим
 	<-c.ready
 
 	return c.err
@@ -99,7 +85,7 @@ type throttleActorState struct {
 	queue          QueueController
 	deadline       time.Time
 	pauseConfirmed bool
-	timer          timerHandle
+	timer          *time.Timer
 	nextTimerAt    time.Time
 	timerArmed     bool
 
@@ -115,42 +101,20 @@ type throttleActorState struct {
 // Throttle придерживает всю очередь, пока расчёт отказывает по частоте.
 // Изменяемым состоянием единолично владеет лениво запускаемый event loop.
 type Throttle struct {
-	logger   *zap.Logger
-	name     string
-	now      func() time.Time
-	newTimer func(time.Duration, func()) timerHandle
+	logger *zap.Logger
+	name   string
 
-	commands    chan throttleCommand
-	loopState   atomic.Uint32
-	completion  *throttleStopCompletion
-	observeLoop func(throttleLoopEvent)
+	commands   chan throttleCommand
+	loopState  atomic.Uint32
+	completion *throttleStopCompletion
 }
 
-func NewThrottle(logger *zap.Logger, name string, now func() time.Time) *Throttle {
-	return newThrottle(logger, name, now, func(delay time.Duration, fire func()) timerHandle {
-		return time.AfterFunc(delay, fire)
-	}, nil)
-}
-
-func newThrottle(
-	logger *zap.Logger,
-	name string,
-	now func() time.Time,
-	newTimer func(time.Duration, func()) timerHandle,
-	observeLoop func(throttleLoopEvent),
-) *Throttle {
-	if now == nil {
-		now = time.Now
-	}
-
+func NewThrottle(logger *zap.Logger, name string) *Throttle {
 	return &Throttle{
-		logger:      logger,
-		name:        name,
-		now:         now,
-		newTimer:    newTimer,
-		commands:    make(chan throttleCommand),
-		completion:  newThrottleStopCompletion(),
-		observeLoop: observeLoop,
+		logger:     logger,
+		name:       name,
+		commands:   make(chan throttleCommand),
+		completion: newThrottleStopCompletion(),
 	}
 }
 
@@ -178,7 +142,7 @@ func (t *Throttle) Pause(ctx context.Context, pause time.Duration) {
 	if !t.send(throttleCommand{
 		kind:     throttlePause,
 		ctx:      ctx,
-		deadline: t.now().Add(pause),
+		deadline: time.Now().Add(pause),
 		reply:    reply,
 	}) {
 		return
@@ -238,9 +202,6 @@ func (t *Throttle) emit(command throttleCommand) {
 }
 
 func (t *Throttle) loop() {
-	if t.observeLoop != nil {
-		t.observeLoop(throttleLoopStarted)
-	}
 	state := throttleActorState{}
 	pending := make([]throttleCommand, 0)
 
@@ -291,9 +252,6 @@ func (t *Throttle) loop() {
 			}
 			t.completion.resolve(command.err)
 			t.loopState.Store(throttleLoopStopped)
-			if t.observeLoop != nil {
-				t.observeLoop(throttleLoopTerminated)
-			}
 
 			return
 		}
@@ -329,7 +287,7 @@ func (t *Throttle) pause(state *throttleActorState, command throttleCommand) {
 	}
 	if err != nil {
 		t.logPauseError(err)
-		t.arm(state, t.now().Add(retryDelay))
+		t.arm(state, time.Now().Add(retryDelay))
 		command.reply <- nil
 
 		return
@@ -365,7 +323,7 @@ func (t *Throttle) onTimer(state *throttleActorState) {
 		return
 	}
 
-	now := t.now()
+	now := time.Now()
 	timerRemaining := state.nextTimerAt.Sub(now)
 	if timerRemaining > 0 {
 		state.timer.Reset(timerRemaining)
@@ -434,7 +392,7 @@ func (t *Throttle) automaticFinished(state *throttleActorState, command throttle
 			if !command.canceled {
 				t.logPauseError(command.err)
 			}
-			t.arm(state, t.now().Add(retryDelay))
+			t.arm(state, time.Now().Add(retryDelay))
 
 			return
 		}
@@ -452,7 +410,7 @@ func (t *Throttle) automaticFinished(state *throttleActorState, command throttle
 				zap.String("queue", t.name),
 				zap.Error(command.err),
 			)
-			t.arm(state, t.now().Add(retryDelay))
+			t.arm(state, time.Now().Add(retryDelay))
 		}
 
 		return
@@ -527,11 +485,11 @@ func (t *Throttle) replyPendingAfterStop(state *throttleActorState, pending []th
 }
 
 func (t *Throttle) arm(state *throttleActorState, deadline time.Time) {
-	delay := max(time.Duration(0), deadline.Sub(t.now()))
+	delay := max(time.Duration(0), time.Until(deadline))
 	state.nextTimerAt = deadline
 	state.timerArmed = true
 	if state.timer == nil {
-		state.timer = t.newTimer(delay, func() {
+		state.timer = time.AfterFunc(delay, func() {
 			t.emit(throttleCommand{kind: throttleTimerFired})
 		})
 

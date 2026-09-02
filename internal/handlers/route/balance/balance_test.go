@@ -43,7 +43,7 @@ func TestBalanceReturnsUserTotalsAsJSONNumbers(t *testing.T) {
 		Withdrawn: money.Points(4200),
 	}, nil, &userID)
 
-	response := serveBalance(newRouter(zap.NewNop(), deps, testUserID))
+	response := serveBalance(newRouter(zap.NewNop(), deps))
 
 	require.Equal(t, http.StatusOK, response.Code)
 	assert.Equal(t, "application/json", response.Header().Get("Content-Type"))
@@ -54,9 +54,7 @@ func TestBalanceReturnsUserTotalsAsJSONNumbers(t *testing.T) {
 func TestBalanceReturnsZerosForEmptyAccount(t *testing.T) {
 	response := serveBalance(newRouter(
 		zap.NewNop(),
-		readReturning(domain.Balance{}, nil, nil),
-		testUserID,
-	))
+		readReturning(domain.Balance{}, nil, nil)))
 
 	require.Equal(t, http.StatusOK, response.Code)
 	assert.JSONEq(t, `{"current":0,"withdrawn":0}`, response.Body.String())
@@ -83,7 +81,7 @@ func TestBalanceLogsInternalError(t *testing.T) {
 	storageErr := errors.New("storage is down")
 	deps := readReturning(domain.Balance{}, storageErr, nil)
 
-	response := serveBalance(newRouter(zap.New(core), deps, testUserID))
+	response := serveBalance(newRouter(zap.New(core), deps))
 
 	require.Equal(t, http.StatusInternalServerError, response.Code)
 	assert.Contains(t, response.Body.String(), message.Internal)

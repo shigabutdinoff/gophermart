@@ -7,19 +7,17 @@ import (
 )
 
 var (
-	// ErrInvalidCredentialsFormat indicates credentials of an invalid format
+	// ErrInvalidCredentialsFormat означает учётные данные негодного формата.
 	ErrInvalidCredentialsFormat = errors.New("invalid credentials format")
-	// ErrLoginTaken indicates that a login is already registered.
+	// ErrLoginTaken означает, что логин уже занят.
 	ErrLoginTaken = errors.New("login is already taken")
-	// ErrUserNotFound indicates that no user exists for a lookup.
+	// ErrUserNotFound означает, что пользователя с таким логином нет.
 	ErrUserNotFound = errors.New("user not found")
-	// ErrInvalidCredentials indicates failed authentication of any cause.
+	// ErrInvalidCredentials скрывает причину неудачной аутентификации.
 	ErrInvalidCredentials = errors.New("invalid credentials")
-	// ErrPasswordMismatch indicates that a password does not match a valid hash.
+	// ErrPasswordMismatch означает, что пароль не подходит к сохранённому хешу.
 	ErrPasswordMismatch = errors.New("password mismatch")
 )
-
-type Clock func() time.Time
 
 // Credentials хранит логин и пароль в открытом виде.
 type Credentials struct {

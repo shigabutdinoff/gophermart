@@ -3,16 +3,11 @@ package jobs
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
-	"gorm.io/gorm"
 )
-
-// errOutsideTransaction ловит попытку поставить задание мимо транзакции заказа.
-var errOutsideTransaction = errors.New("order transaction is not a sql transaction")
 
 // CheckAccrualArgs несёт номер заказа, который предстоит опросить.
 type CheckAccrualArgs struct {
@@ -50,16 +45,10 @@ func (d *Dispatcher) insertOptions() *river.InsertOpts {
 	}
 }
 
-// Push кладёт задание той же транзакцией, что и вставку заказа: gorm держит
-// её в ConnPool, очередь ждёт ту же *sql.Tx.
-func (d *Dispatcher) Push(ctx context.Context, tx *gorm.DB, number string) error {
-	sqlTx, ok := tx.Statement.ConnPool.(*sql.Tx)
-	if !ok {
-		return errOutsideTransaction
-	}
-
+// Push кладёт задание той же транзакцией, что и вставку заказа.
+func (d *Dispatcher) Push(ctx context.Context, tx *sql.Tx, number string) error {
 	args := CheckAccrualArgs{Number: number}
-	if _, err := d.queue.InsertTx(ctx, sqlTx, args, d.insertOptions()); err != nil {
+	if _, err := d.queue.InsertTx(ctx, tx, args, d.insertOptions()); err != nil {
 		return fmt.Errorf("dispatch %s: %w", CheckAccrualArgs{}.Kind(), err)
 	}
 

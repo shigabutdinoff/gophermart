@@ -41,7 +41,7 @@ func waitDone(t *testing.T, done <-chan error) error {
 func TestServer_ServesAndLogsStart(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	s := mustNew(t, zap.New(core), config.Default())
-	s.RunAddress = "127.0.0.1:0"
+	s.runAddress = "127.0.0.1:0"
 
 	r := chi.NewRouter()
 	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -81,7 +81,7 @@ func TestServer_GracefulShutdownWaitsForActiveRequest(t *testing.T) {
 
 	core, logs := observer.New(zap.InfoLevel)
 	s := mustNew(t, zap.New(core), config.Default())
-	s.RunAddress = "127.0.0.1:0"
+	s.runAddress = "127.0.0.1:0"
 	s.router = r
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -140,7 +140,7 @@ func TestServer_ForcesShutdownAfterTimeout(t *testing.T) {
 
 	core, logs := observer.New(zap.InfoLevel)
 	s := mustNew(t, zap.New(core), config.Default())
-	s.RunAddress = "127.0.0.1:0"
+	s.runAddress = "127.0.0.1:0"
 	s.shutdownTimeout = 100 * time.Millisecond
 	s.router = r
 
@@ -166,7 +166,7 @@ func TestServer_ForcesShutdownAfterTimeout(t *testing.T) {
 func TestServer_ServeErrorReturnedNotLogged(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
 	s := mustNew(t, zap.New(core), config.Default())
-	s.RunAddress = "127.0.0.1:0"
+	s.runAddress = "127.0.0.1:0"
 	s.router = chi.NewRouter()
 
 	done := startServer(t, context.Background(), s)
@@ -192,7 +192,7 @@ func TestServer_ServeFailureClosesActiveConnections(t *testing.T) {
 	})
 
 	s := mustNew(t, zap.NewNop(), config.Default())
-	s.RunAddress = "127.0.0.1:0"
+	s.runAddress = "127.0.0.1:0"
 	s.router = r
 
 	done := startServer(t, context.Background(), s)
@@ -222,7 +222,7 @@ func TestServer_ServeFailureClosesActiveConnections(t *testing.T) {
 
 func TestServer_ServeErrorSurvivesShutdownPath(t *testing.T) {
 	s := mustNew(t, zap.NewNop(), config.Default())
-	s.RunAddress = "127.0.0.1:0"
+	s.runAddress = "127.0.0.1:0"
 	s.router = chi.NewRouter()
 
 	done := startServer(t, context.Background(), s)
@@ -251,7 +251,7 @@ func TestServer_RunReturnsWhenServeStopsOnItsOwn(t *testing.T) {
 	})
 
 	s := mustNew(t, zap.NewNop(), config.Default())
-	s.RunAddress = "127.0.0.1:0"
+	s.runAddress = "127.0.0.1:0"
 	s.router = r
 
 	done := startServer(t, context.Background(), s)
@@ -272,12 +272,12 @@ func TestServer_Run_AddressBusy(t *testing.T) {
 	defer ln.Close()
 
 	s := mustNew(t, zap.NewNop(), config.Default())
-	s.RunAddress = ln.Addr().String()
+	s.runAddress = ln.Addr().String()
 	require.Error(t, s.Run(context.Background()))
 }
 
 func TestServer_Run_InvalidAddress(t *testing.T) {
 	s := mustNew(t, zap.NewNop(), config.Default())
-	s.RunAddress = "bad::addr"
+	s.runAddress = "bad::addr"
 	require.Error(t, s.Run(context.Background()))
 }

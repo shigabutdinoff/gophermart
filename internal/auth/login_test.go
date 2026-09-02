@@ -1,4 +1,4 @@
-package auth
+package auth_test
 
 import (
 	"cmp"
@@ -7,69 +7,78 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
+
+	"github.com/shigabutdinoff/gophermart/internal/auth"
+	authmocks "github.com/shigabutdinoff/gophermart/internal/auth/mocks"
 )
+
+// loginCollaborators держит три узких зависимости входа. Незаявленный вызов
+// мока валит тест сам, поэтому «не звали» отдельной проверки не требует.
+type loginCollaborators struct {
+	users     *authmocks.MockUserFinder
+	passwords *authmocks.MockPasswordVerifier
+	issuer    *authmocks.MockTokenIssuer
+}
+
+func newLoginCollaborators(t *testing.T) loginCollaborators {
+	t.Helper()
+
+	return loginCollaborators{
+		users:     authmocks.NewMockUserFinder(t),
+		passwords: authmocks.NewMockPasswordVerifier(t),
+		issuer:    authmocks.NewMockTokenIssuer(t),
+	}
+}
+
+func (c loginCollaborators) service() *auth.LoginService {
+	return auth.NewLoginService(c.users, c.passwords, c.issuer)
+}
 
 func TestLoginServiceLoginIssuesTokenForNormalizedLogin(t *testing.T) {
 	t.Parallel()
 
-	credentials := Credentials{Login: "alice", Password: "original-password"}
-	var gotLogin, gotHash, gotPassword string
-	var gotUserID int64
-	users := &fakeUserRepository{findFunc: func(_ context.Context, login string) (User, error) {
-		gotLogin = login
-		return User{ID: 7, PasswordHash: "stored-hash"}, nil
-	}}
-	passwords := &fakePasswords{verifyFunc: func(hash, password string) error {
-		gotHash, gotPassword = hash, password
-		return nil
-	}}
-	issuer := &fakeTokenIssuer{issueFunc: func(userID int64) (IssuedToken, error) {
-		gotUserID = userID
-		return IssuedToken{Value: "exact-token"}, nil
-	}}
+	collaborators := newLoginCollaborators(t)
+	collaborators.users.EXPECT().FindByLogin(mock.Anything, "alice").
+		Return(auth.User{ID: 7, PasswordHash: "stored-hash"}, nil).Once()
+	collaborators.passwords.EXPECT().Verify("stored-hash", "original-password").
+		Return(nil).Once()
+	collaborators.issuer.EXPECT().Issue(int64(7)).
+		Return(auth.IssuedToken{Value: "exact-token"}, nil).Once()
 
-	service, err := NewLoginService(zap.NewNop(), users, passwords, issuer)
-	require.NoError(t, err)
+	got, err := collaborators.service().Login(
+		context.Background(),
+		auth.Credentials{Login: "alice", Password: "original-password"},
+	)
 
-	got, err := service.Login(context.Background(), credentials)
 	require.NoError(t, err)
 	assert.Equal(t, "exact-token", got.Value)
-	assert.Equal(t, "alice", gotLogin)
-	assert.Equal(t, "stored-hash", gotHash)
-	assert.Equal(t, "original-password", gotPassword)
-	assert.Equal(t, int64(7), gotUserID)
 }
 
 func TestLoginServiceLoginRejectsUnknownUserAndWrongPasswordIdentically(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name       string
-		findErr    error
-		verifyErr  error
-		wantVerify int
+		name      string
+		findErr   error
+		verifyErr error
 	}{
-		{name: "unknown user", findErr: ErrUserNotFound},
-		{name: "wrong password", verifyErr: ErrPasswordMismatch, wantVerify: 1},
+		{name: "unknown user", findErr: auth.ErrUserNotFound},
+		{name: "wrong password", verifyErr: auth.ErrPasswordMismatch},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			users := &fakeUserRepository{findFunc: func(context.Context, string) (User, error) {
-				return User{ID: 7, PasswordHash: "stored-hash"}, test.findErr
-			}}
-			passwords := &fakePasswords{verifyFunc: func(string, string) error { return test.verifyErr }}
-			issuer := &fakeTokenIssuer{}
+			collaborators := newLoginCollaborators(t)
+			expectFindAndVerify(collaborators, test.findErr, test.verifyErr)
 
-			service, err := NewLoginService(zap.NewNop(), users, passwords, issuer)
-			require.NoError(t, err)
+			got, err := collaborators.service().Login(
+				context.Background(),
+				auth.Credentials{Login: "alice", Password: "password"},
+			)
 
-			got, err := service.Login(context.Background(), Credentials{Login: "alice", Password: "password"})
-			assert.ErrorIs(t, err, ErrInvalidCredentials)
+			assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
 			assert.Zero(t, got)
-			assert.Equal(t, test.wantVerify, passwords.verifyCalls)
-			assert.Zero(t, issuer.calls)
 		})
 	}
 }
@@ -81,34 +90,43 @@ func TestLoginServiceLoginReturnsInternalFailures(t *testing.T) {
 	damagedHashErr := errors.New("damaged password hash")
 	issuerErr := errors.New("issuer unavailable")
 	for _, test := range []struct {
-		name       string
-		findErr    error
-		verifyErr  error
-		issueErr   error
-		wantVerify int
-		wantIssue  int
+		name      string
+		findErr   error
+		verifyErr error
+		issueErr  error
 	}{
 		{name: "repository", findErr: repositoryErr},
-		{name: "damaged hash", verifyErr: damagedHashErr, wantVerify: 1},
-		{name: "issuer", issueErr: issuerErr, wantVerify: 1, wantIssue: 1},
+		{name: "damaged hash", verifyErr: damagedHashErr},
+		{name: "issuer", issueErr: issuerErr},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			users := &fakeUserRepository{findFunc: func(context.Context, string) (User, error) {
-				return User{ID: 7, PasswordHash: "stored-hash"}, test.findErr
-			}}
-			passwords := &fakePasswords{verifyFunc: func(string, string) error { return test.verifyErr }}
-			issuer := &fakeTokenIssuer{issueFunc: func(int64) (IssuedToken, error) { return IssuedToken{}, test.issueErr }}
+			collaborators := newLoginCollaborators(t)
+			expectFindAndVerify(collaborators, test.findErr, test.verifyErr)
+			if test.findErr == nil && test.verifyErr == nil {
+				collaborators.issuer.EXPECT().Issue(int64(7)).
+					Return(auth.IssuedToken{}, test.issueErr).Once()
+			}
 
-			service, err := NewLoginService(zap.NewNop(), users, passwords, issuer)
-			require.NoError(t, err)
+			got, err := collaborators.service().Login(
+				context.Background(),
+				auth.Credentials{Login: "alice", Password: "password"},
+			)
 
-			got, err := service.Login(context.Background(), Credentials{Login: "alice", Password: "password"})
 			assert.ErrorIs(t, err, cmp.Or(test.findErr, test.verifyErr, test.issueErr))
-			assert.NotErrorIs(t, err, ErrInvalidCredentials)
+			assert.NotErrorIs(t, err, auth.ErrInvalidCredentials)
 			assert.Zero(t, got)
-			assert.Equal(t, test.wantVerify, passwords.verifyCalls)
-			assert.Equal(t, test.wantIssue, issuer.calls)
 		})
 	}
+}
+
+// expectFindAndVerify заявляет ровно те вызовы, до которых вход доходит:
+// после отказа поиска пароль не сверяется.
+func expectFindAndVerify(c loginCollaborators, findErr, verifyErr error) {
+	c.users.EXPECT().FindByLogin(mock.Anything, "alice").
+		Return(auth.User{ID: 7, PasswordHash: "stored-hash"}, findErr).Once()
+	if findErr != nil {
+		return
+	}
+	c.passwords.EXPECT().Verify("stored-hash", "password").Return(verifyErr).Once()
 }

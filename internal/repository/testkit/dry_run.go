@@ -3,7 +3,10 @@ package testkit
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"slices"
+	"sync"
 	"testing"
 
 	"gorm.io/gorm"
@@ -11,12 +14,11 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
 )
 
-const dryRunDSN = "postgres://gophermart:password@127.0.0.1:1/gophermart?sslmode=disable"
-
 const (
-	createResultKey = "testkit:dry-run-create-result"
-	execResultKey   = "testkit:dry-run-exec-result"
-	queryResultKey  = "testkit:dry-run-query-result"
+	createResultKey     = "testkit:dry-run-create-result"
+	execResultKey       = "testkit:dry-run-exec-result"
+	queryResultKey      = "testkit:dry-run-query-result"
+	transactionStateKey = "testkit:dry-run-transaction-state"
 )
 
 // TransactionState хранит результат жизненного цикла транзакции в DryRun-тесте.
@@ -24,39 +26,90 @@ type TransactionState struct {
 	Begun      int
 	Committed  int
 	RolledBack int
-	Isolation  sql.IsolationLevel
 }
 
-type dryRunConnPool struct {
-	gorm.ConnPool
-	state *TransactionState
+// transactionRecorder синхронизирует счётчики: откат отменённой транзакции
+// database/sql выполняет фоновой горутиной, а читает их тест.
+type transactionRecorder struct {
+	mu    sync.Mutex
+	state TransactionState
 }
 
-func (p *dryRunConnPool) BeginTx(
-	_ context.Context,
-	options *sql.TxOptions,
-) (gorm.ConnPool, error) {
-	p.state.Begun++
-	if options != nil {
-		p.state.Isolation = options.Isolation
-	}
+func (r *transactionRecorder) begin() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.state.Begun++
+}
 
-	return &dryRunTransaction{ConnPool: p.ConnPool, state: p.state}, nil
+func (r *transactionRecorder) commit() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.state.Committed++
+}
+
+func (r *transactionRecorder) rollback() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.state.RolledBack++
+}
+
+func (r *transactionRecorder) snapshot() TransactionState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.state
+}
+
+// dryRunDriver отдаёт настоящие транзакции database/sql, не открывая БД:
+// очередь заданий ждёт *sql.Tx, и подделка тут скрыла бы ошибку проводки.
+type dryRunDriver struct{}
+
+func (dryRunDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("connections come from Connect")
+}
+
+type dryRunConnector struct {
+	recorder *transactionRecorder
+}
+
+func (c *dryRunConnector) Connect(context.Context) (driver.Conn, error) {
+	return &dryRunConnection{recorder: c.recorder}, nil
+}
+
+func (*dryRunConnector) Driver() driver.Driver { return dryRunDriver{} }
+
+type dryRunConnection struct {
+	recorder *transactionRecorder
+}
+
+func (*dryRunConnection) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("query is not supported")
+}
+
+func (*dryRunConnection) Close() error { return nil }
+
+func (c *dryRunConnection) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
+
+func (c *dryRunConnection) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	c.recorder.begin()
+
+	return &dryRunTransaction{recorder: c.recorder}, nil
 }
 
 type dryRunTransaction struct {
-	gorm.ConnPool
-	state *TransactionState
+	recorder *transactionRecorder
 }
 
 func (tx *dryRunTransaction) Commit() error {
-	tx.state.Committed++
+	tx.recorder.commit()
 
 	return nil
 }
 
 func (tx *dryRunTransaction) Rollback() error {
-	tx.state.RolledBack++
+	tx.recorder.rollback()
 
 	return nil
 }
@@ -76,32 +129,39 @@ type queryResult struct {
 	err   error
 }
 
+// NewDryRunSession отдаёт репозиторию сессию, а тесту ручку фикстуры.
+func NewDryRunSession(t testing.TB) (database.Session, *gorm.DB) {
+	t.Helper()
+
+	gormDB := NewDryRunDB(t)
+
+	return database.NewSession(gormDB), gormDB
+}
+
 func NewDryRunDB(t testing.TB) *gorm.DB {
 	t.Helper()
 
-	gormDB, err := database.Connection(dryRunDSN)
-	if err != nil {
-		t.Fatalf("open GORM DryRun database: %v", err)
-	}
+	gormDB, _ := newDryRunDB(t)
 
-	gormDB = gormDB.Session(&gorm.Session{
+	return gormDB
+}
+
+func newDryRunDB(t testing.TB) (*gorm.DB, *transactionRecorder) {
+	t.Helper()
+
+	recorder := &transactionRecorder{}
+	sqlDB := sql.OpenDB(&dryRunConnector{recorder: recorder})
+	gormDB := openGORM(t, sqlDB).Session(&gorm.Session{
 		DryRun:                 true,
 		SkipDefaultTransaction: true,
 	})
-	sqlDB, err := gormDB.DB()
-	if err != nil {
-		t.Fatalf("get underlying DryRun database: %v", err)
-	}
 	t.Cleanup(func() {
 		if err := sqlDB.Close(); err != nil {
 			t.Errorf("close GORM DryRun database: %v", err)
 		}
 	})
+	gormDB.Statement.Settings.Store(transactionStateKey, recorder)
 
-	state := &TransactionState{}
-	pool := &dryRunConnPool{ConnPool: gormDB.Statement.ConnPool, state: state}
-	gormDB.Config.ConnPool = pool
-	gormDB.Statement.ConnPool = pool
 	requireCallback(t, gormDB.Callback().Create().After("gorm:create").Register(
 		createResultKey,
 		func(tx *gorm.DB) {
@@ -148,36 +208,77 @@ func NewDryRunDB(t testing.TB) *gorm.DB {
 		},
 	))
 
+	return gormDB, recorder
+}
+
+// NewDryRunDBWithoutSQLTransaction даёт фикстуру, чья транзакция не *sql.Tx:
+// так проверяется отказ поставить задание мимо транзакции заказа.
+func NewDryRunDBWithoutSQLTransaction(t testing.TB) *gorm.DB {
+	t.Helper()
+
+	gormDB, recorder := newDryRunDB(t)
+	gormDB.Statement.ConnPool = &foreignPool{
+		ConnPool: gormDB.Statement.ConnPool,
+		recorder: recorder,
+	}
+
 	return gormDB
 }
 
-// TransactionStateOf возвращает состояние транзакций, начатых через DryRun-фикстуру.
+// foreignPool начинает транзакцию так, как это делает драйвер без
+// database/sql: gorm получает свой ConnPool, а не *sql.Tx.
+type foreignPool struct {
+	gorm.ConnPool
+	recorder *transactionRecorder
+}
+
+func (p *foreignPool) BeginTx(context.Context, *sql.TxOptions) (gorm.ConnPool, error) {
+	p.recorder.begin()
+
+	return &foreignTransaction{ConnPool: p.ConnPool, recorder: p.recorder}, nil
+}
+
+type foreignTransaction struct {
+	gorm.ConnPool
+	recorder *transactionRecorder
+}
+
+func (tx *foreignTransaction) Commit() error {
+	tx.recorder.commit()
+
+	return nil
+}
+
+func (tx *foreignTransaction) Rollback() error {
+	tx.recorder.rollback()
+
+	return nil
+}
+
+// TransactionStateOf возвращает состояние транзакций DryRun-фикстуры.
 func TransactionStateOf(t testing.TB, db *gorm.DB) TransactionState {
 	t.Helper()
 
-	pool, ok := db.Statement.ConnPool.(*dryRunConnPool)
+	stored, ok := db.Statement.Settings.Load(transactionStateKey)
 	if !ok {
-		t.Fatal("DryRun transaction pool is not configured")
+		t.Fatal("DryRun transaction state is not configured")
 	}
 
-	return *pool.state
+	return stored.(*transactionRecorder).snapshot()
 }
 
 // SetCreateResult задаёт результат вставки для DryRun-фикстуры.
-func SetCreateResult(t testing.TB, db *gorm.DB, rowsAffected int64, err error) {
-	t.Helper()
+func SetCreateResult(db *gorm.DB, rowsAffected int64, err error) {
 	db.Statement.Settings.Store(createResultKey, createResult{rowsAffected: rowsAffected, err: err})
 }
 
 // SetExecResult задаёт результат сырой записи для DryRun-фикстуры.
-func SetExecResult(t testing.TB, db *gorm.DB, rowsAffected int64, err error) {
-	t.Helper()
+func SetExecResult(db *gorm.DB, rowsAffected int64, err error) {
 	db.Statement.Settings.Store(execResultKey, execResult{rowsAffected: rowsAffected, err: err})
 }
 
 // SetQueryResult задаёт строки и ошибку чтения для DryRun-фикстуры.
-func SetQueryResult[T any](t testing.TB, db *gorm.DB, rows []T, err error) {
-	t.Helper()
+func SetQueryResult[T any](db *gorm.DB, rows []T, err error) {
 	resultRows := slices.Clone(rows)
 	db.Statement.Settings.Store(queryResultKey, queryResult{
 		apply: func(destination any) {

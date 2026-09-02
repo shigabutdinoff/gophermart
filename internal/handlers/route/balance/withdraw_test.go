@@ -20,11 +20,9 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/ordernumber"
 )
 
-func serveWithdraw(handler http.Handler, contentType, body string) *httptest.ResponseRecorder {
+func serveWithdraw(handler http.Handler, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodPost, withdrawPath, strings.NewReader(body))
-	if contentType != "" {
-		request.Header.Set("Content-Type", contentType)
-	}
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 
@@ -69,8 +67,7 @@ func TestWithdrawReturnsEmptyOKAndPassesBodyWithUser(t *testing.T) {
 	}}
 
 	response := serveWithdraw(
-		newRouter(zap.NewNop(), deps, testUserID),
-		"application/json",
+		newRouter(zap.NewNop(), deps),
 		`{"order":"2377225624","sum":751}`,
 	)
 
@@ -93,8 +90,7 @@ func TestWithdrawPassesFractionalSumAsKopecks(t *testing.T) {
 	}}
 
 	response := serveWithdraw(
-		newRouter(zap.NewNop(), deps, testUserID),
-		"application/json",
+		newRouter(zap.NewNop(), deps),
 		`{"order":"2377225624","sum":751.5}`,
 	)
 
@@ -119,8 +115,7 @@ func TestWithdrawAnswersExpectedDomainFailuresWithoutLogging(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			core, logs := observer.New(zapcore.ErrorLevel)
 			response := serveWithdraw(
-				newRouter(zap.New(core), withdrawReturning(test.withdrawErr, nil), testUserID),
-				"application/json",
+				newRouter(zap.New(core), withdrawReturning(test.withdrawErr, nil)),
 				`{"order":"2377225624","sum":751}`,
 			)
 
@@ -154,8 +149,7 @@ func TestWithdrawValidatesJSONAndValuesBeforeRepository(t *testing.T) {
 			deps := Deps{Withdraw: domain.NewWithdrawService(storage).Withdraw}
 
 			response := serveWithdraw(
-				newRouter(zap.NewNop(), deps, testUserID),
-				"application/json",
+				newRouter(zap.NewNop(), deps),
 				test.body,
 			)
 
@@ -169,7 +163,6 @@ func TestWithdrawWithoutRouteAuthorizationRejectsMissingUser(t *testing.T) {
 	calls := 0
 	response := serveWithdraw(
 		newUnprotectedRouter(zap.NewNop(), withdrawReturning(nil, &calls)),
-		"application/json",
 		`{"order":"2377225624","sum":1}`,
 	)
 
@@ -183,8 +176,7 @@ func TestWithdrawLogsInternalError(t *testing.T) {
 	storageErr := errors.New("storage is down")
 
 	response := serveWithdraw(
-		newRouter(zap.New(core), withdrawReturning(storageErr, nil), testUserID),
-		"application/json",
+		newRouter(zap.New(core), withdrawReturning(storageErr, nil)),
 		`{"order":"2377225624","sum":751}`,
 	)
 

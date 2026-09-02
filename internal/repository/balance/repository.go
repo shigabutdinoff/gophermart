@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"gorm.io/gorm"
-
 	domain "github.com/shigabutdinoff/gophermart/internal/balance"
 	"github.com/shigabutdinoff/gophermart/internal/money"
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
@@ -53,9 +51,9 @@ type Repository struct {
 	session database.Session
 }
 
-// New принимает nil вместо БД, тогда репозиторий отвечает отказом.
-func New(db *gorm.DB) *Repository {
-	return &Repository{session: database.NewSession(db)}
+// New принимает нулевую сессию вместо БД, тогда репозиторий отвечает отказом.
+func New(session database.Session) *Repository {
+	return &Repository{session: session}
 }
 
 // Balance считает начисленные и списанные баллы одним запросом.

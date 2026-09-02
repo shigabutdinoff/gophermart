@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -166,7 +167,8 @@ func TestClientOrderInfoLeavesUnnamedRetryAfterToCaller(t *testing.T) {
 }
 
 func TestRetryAfter(t *testing.T) {
-	// заголовок ставится по указателю, иначе пустое значение неотличимо от его отсутствия
+	// заголовок ставится по указателю, иначе пустое значение
+	// неотличимо от его отсутствия
 	value := func(header string) *string { return &header }
 
 	tests := []struct {
@@ -210,16 +212,15 @@ func TestRetryAfter(t *testing.T) {
 	}
 }
 
+// Внутри пузыря часы стоят, поэтому остаток до даты называется точно, а не
+// зажимается измерениями до и после вызова.
 func TestRetryAfterUsesRemainingTimeUntilHTTPDate(t *testing.T) {
-	date := time.Now().Add(2 * time.Minute).UTC().Truncate(time.Second)
-	header := http.Header{"Retry-After": {date.Format(http.TimeFormat)}}
+	synctest.Test(t, func(t *testing.T) {
+		date := time.Now().Add(2 * time.Minute).UTC()
+		header := http.Header{"Retry-After": {date.Format(http.TimeFormat)}}
 
-	before := time.Until(date)
-	delay := retryAfter(header)
-	after := time.Until(date)
-
-	assert.LessOrEqual(t, delay, before)
-	assert.GreaterOrEqual(t, delay, after)
+		assert.Equal(t, 2*time.Minute, retryAfter(header))
+	})
 }
 
 func TestRetryAfterClampsFutureHTTPDate(t *testing.T) {

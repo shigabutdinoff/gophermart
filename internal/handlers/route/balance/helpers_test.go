@@ -14,12 +14,12 @@ import (
 
 const testUserID = 42
 
-func newRouter(logger *zap.Logger, deps Deps, userID int64) http.Handler {
+func newRouter(logger *zap.Logger, deps Deps) http.Handler {
 	router := chi.NewRouter()
 	api := apiconfig.NewAPI(router)
 	authorize := authorization.Middleware(
 		api,
-		func(*http.Request, request.Extractor) (int64, error) { return userID, nil },
+		func(*http.Request, request.Extractor) (int64, error) { return testUserID, nil },
 	)
 	RegisterRoutes(api, logger, deps, Options{Middlewares: huma.Middlewares{
 		authorize,

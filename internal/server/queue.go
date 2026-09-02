@@ -12,7 +12,6 @@ import (
 	"go.uber.org/zap/exp/zapslog"
 
 	"github.com/shigabutdinoff/gophermart/internal/accrual"
-	"github.com/shigabutdinoff/gophermart/internal/auth"
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 	"github.com/shigabutdinoff/gophermart/internal/jobs"
 	"github.com/shigabutdinoff/gophermart/internal/order"
@@ -33,16 +32,13 @@ type queueThrottle interface {
 	Attach(jobs.QueueController) error
 }
 
-type queueThrottleFactory func(*zap.Logger, string, auth.Clock) queueThrottle
-
 // queueOptions собирает очередь заданий вокруг хранилища заказов.
 type queueOptions struct {
-	logger       *zap.Logger
-	cfg          config.Config
-	now          auth.Clock
-	storedOrders order.ResultWriter
-	sqlDB        *sql.DB
-	newThrottle  queueThrottleFactory
+	logger         *zap.Logger
+	queue          config.QueueConfig
+	accrualAddress string
+	storedOrders   order.ResultWriter
+	sqlDB          *sql.DB
 }
 
 // newQueueClient поднимает очередь заданий поверх того же пула, что и gorm:
@@ -52,30 +48,23 @@ func newQueueClient(options queueOptions) (queueParts, error) {
 	if options.sqlDB == nil {
 		return queueParts{}, nil
 	}
-	newThrottle := options.newThrottle
-	if newThrottle == nil {
-		newThrottle = func(logger *zap.Logger, name string, now auth.Clock) queueThrottle {
-			return jobs.NewThrottle(logger, name, now)
-		}
-	}
-
-	cfg := options.cfg
-	queueConfig := newQueueConfig(options.logger, cfg)
-	accrualClient, accrualErr := accrual.New(cfg.AccrualAddress)
+	queue := options.queue
+	queueConfig := newQueueConfig(options.logger, queue)
+	accrualClient, accrualErr := accrual.New(options.accrualAddress)
 	var throttle queueThrottle
 	if accrualErr != nil {
 		options.logger.Warn("Опрос системы расчёта отключён", zap.Error(accrualErr))
 	} else {
-		throttle = newThrottle(options.logger, cfg.Queue.Name, options.now)
+		throttle = jobs.NewThrottle(options.logger, queue.Name)
 		queueConfig.Workers = buildWorkers(
 			options.logger,
-			cfg,
+			queue,
 			options.storedOrders,
 			accrualClient,
 			throttle,
 		)
 		queueConfig.Queues = map[string]river.QueueConfig{
-			cfg.Queue.Name: {MaxWorkers: cfg.Queue.Workers},
+			queue.Name: {MaxWorkers: queue.Workers},
 		}
 	}
 
@@ -98,12 +87,12 @@ func newQueueClient(options queueOptions) (queueParts, error) {
 
 func newQueueConfig(
 	logger *zap.Logger,
-	cfg config.Config,
+	queue config.QueueConfig,
 ) *river.Config {
 	return &river.Config{
 		Logger:            queueLogger(logger),
-		MaxAttempts:       cfg.Queue.MaxAttempts,
-		FetchPollInterval: cfg.Queue.FetchPollInterval,
+		MaxAttempts:       queue.MaxAttempts,
+		FetchPollInterval: queue.FetchPollInterval,
 	}
 }
 
@@ -140,15 +129,15 @@ func queueLogger(logger *zap.Logger) *slog.Logger {
 // buildWorkers оставляет сервис без опроса расчёта, если его адрес непригоден.
 func buildWorkers(
 	logger *zap.Logger,
-	cfg config.Config,
+	queue config.QueueConfig,
 	storedOrders order.ResultWriter,
 	client jobs.AccrualClient,
 	throttle jobs.Throttler,
 ) *river.Workers {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, jobs.NewCheckAccrual(logger, client, storedOrders, jobs.CheckAccrualOptions{
-		PollInterval:    cfg.Queue.AccrualPollInterval,
-		ThrottleBackoff: cfg.Queue.ThrottleBackoff,
+		PollInterval:    queue.AccrualPollInterval,
+		ThrottleBackoff: queue.ThrottleBackoff,
 		Throttle:        throttle,
 	}))
 

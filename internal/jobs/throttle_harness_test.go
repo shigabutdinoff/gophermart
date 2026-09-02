@@ -6,30 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jonboulle/clockwork"
 	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	jobsmocks "github.com/shigabutdinoff/gophermart/internal/jobs/mocks"
+	"github.com/shigabutdinoff/gophermart/internal/testsupport"
 )
-
-var throttleClockStart = time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
-
-func newThrottleTimerFactory(
-	clock *clockwork.FakeClock,
-	callbackReturned chan<- struct{},
-) func(time.Duration, func()) timerHandle {
-	return func(delay time.Duration, fire func()) timerHandle {
-		return clock.AfterFunc(delay, func() {
-			fire()
-			if callbackReturned != nil {
-				callbackReturned <- struct{}{}
-			}
-		})
-	}
-}
 
 type pausedQueue struct {
 	mu sync.Mutex
@@ -38,7 +22,6 @@ type pausedQueue struct {
 
 	pauses  int
 	resumes int
-	names   []string
 
 	pauseErr  error
 	resumeErr error
@@ -74,10 +57,9 @@ func newPausedQueue(t *testing.T, pauses, resumes int) *pausedQueue {
 	return queue
 }
 
-func (q *pausedQueue) pause(ctx context.Context, name string, _ *river.QueuePauseOpts) error {
+func (q *pausedQueue) pause(ctx context.Context, _ string, _ *river.QueuePauseOpts) error {
 	q.mu.Lock()
 	q.pauses++
-	q.names = append(q.names, name)
 	err := q.pauseErr
 	block := q.pauseBlock
 	q.mu.Unlock()
@@ -93,10 +75,9 @@ func (q *pausedQueue) pause(ctx context.Context, name string, _ *river.QueuePaus
 	return err
 }
 
-func (q *pausedQueue) resume(ctx context.Context, name string, _ *river.QueuePauseOpts) error {
+func (q *pausedQueue) resume(ctx context.Context, _ string, _ *river.QueuePauseOpts) error {
 	q.mu.Lock()
 	q.resumes++
-	q.names = append(q.names, name)
 	err := q.resumeErr
 	block := q.resumeBlock
 	q.mu.Unlock()
@@ -143,67 +124,35 @@ func (q *pausedQueue) setPauseBlock(block <-chan struct{}) {
 	q.mu.Unlock()
 }
 
+const (
+	throttleTimedOut      = "throttle coordination timed out"
+	unexpectedThrottleRun = "unexpected throttle event"
+)
+
 func waitThrottleValue[T any](t *testing.T, ch <-chan T) T {
 	t.Helper()
-	select {
-	case value := <-ch:
-		return value
-	case <-time.After(time.Second):
-		require.FailNow(t, "throttle coordination timed out")
-		var zero T
 
-		return zero
-	}
+	return testsupport.WaitValue(t, ch, throttleTimedOut)
 }
 
 func requireNoThrottleValue[T any](t *testing.T, ch <-chan T) {
 	t.Helper()
-	select {
-	case <-ch:
-		require.FailNow(t, "unexpected throttle event")
-	case <-time.After(20 * time.Millisecond):
-	}
+	testsupport.RequireNoValue(t, ch, unexpectedThrottleRun)
 }
 
-func waitForThrottleTimers(t *testing.T, clock *clockwork.FakeClock, count int) {
+func waitThrottleValueAt[T any](t *testing.T, ch <-chan T, delay time.Duration) T {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	require.NoError(t, clock.BlockUntilContext(ctx, count))
+
+	return testsupport.WaitValueAt(t, ch, delay, throttleTimedOut)
 }
 
-func newDeterministicThrottle(
-	t *testing.T,
-	queue *pausedQueue,
-) (*Throttle, *clockwork.FakeClock) {
+func newDeterministicThrottle(t *testing.T, logger *zap.Logger, queue *pausedQueue) *Throttle {
 	t.Helper()
-	throttle, clock := newObservedThrottle(t, zap.NewNop())
+	throttle := NewThrottle(logger, "orders")
 	require.NoError(t, throttle.Attach(queue.controller))
+	// упавший require обрывает горутину теста, и без остановки поверх
+	// настоящей ошибки прилетела бы вторая паника про дедлок
+	t.Cleanup(func() { _ = throttle.Stop(context.Background()) })
 
-	return throttle, clock
-}
-
-func newObservedThrottle(
-	t *testing.T,
-	logger *zap.Logger,
-) (*Throttle, *clockwork.FakeClock) {
-	t.Helper()
-	clock := clockwork.NewFakeClockAt(throttleClockStart)
-	throttle := newThrottle(logger, "orders", clock.Now, newThrottleTimerFactory(clock, nil), nil)
-
-	return throttle, clock
-}
-
-func newObservedThrottleWithLifecycle(
-	t *testing.T,
-	logger *zap.Logger,
-) (*Throttle, *clockwork.FakeClock, <-chan throttleLoopEvent) {
-	t.Helper()
-	clock := clockwork.NewFakeClockAt(throttleClockStart)
-	events := make(chan throttleLoopEvent, 4)
-	throttle := newThrottle(logger, "orders", clock.Now, newThrottleTimerFactory(clock, nil), func(event throttleLoopEvent) {
-		events <- event
-	})
-
-	return throttle, clock, events
+	return throttle
 }

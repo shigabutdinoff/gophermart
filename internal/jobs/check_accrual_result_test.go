@@ -29,12 +29,12 @@ func TestCheckAccrual_WritesFinalOutcomeAndFinishesJob(t *testing.T) {
 	}{
 		{
 			name:    "расчёт завершён",
-			info:    accrual.OrderInfo{Number: "12345678903", Status: order.StatusProcessed, Accrual: &accrued},
+			info:    accrual.OrderInfo{Status: order.StatusProcessed, Accrual: &accrued},
 			accrual: &accrued,
 		},
 		{
 			name: "заказ отвергнут",
-			info: accrual.OrderInfo{Number: "12345678903", Status: order.StatusInvalid},
+			info: accrual.OrderInfo{Status: order.StatusInvalid},
 		},
 	}
 
@@ -51,7 +51,7 @@ func TestCheckAccrual_WritesFinalOutcomeAndFinishesJob(t *testing.T) {
 }
 
 func TestCheckAccrual_ReturnsUnfinishedOrderToQueue(t *testing.T) {
-	info := accrual.OrderInfo{Number: "12345678903", Status: order.StatusProcessing}
+	info := accrual.OrderInfo{Status: order.StatusProcessing}
 	orders := newResultWriter(t, order.StatusProcessing, nil, false, nil)
 	client := newAccrualClient(t, info, nil)
 
@@ -65,7 +65,7 @@ func TestCheckAccrual_ReturnsUnfinishedOrderToQueue(t *testing.T) {
 
 // Заказ, закрытый другой попыткой, репозиторий отдаёт завершённым.
 func TestCheckAccrual_CompletesWhenStoredOrderIsAlreadyFinal(t *testing.T) {
-	info := accrual.OrderInfo{Number: "12345678903", Status: order.StatusProcessing}
+	info := accrual.OrderInfo{Status: order.StatusProcessing}
 	orders := newResultWriter(t, order.StatusProcessing, nil, true, nil)
 	client := newAccrualClient(t, info, nil)
 
@@ -80,7 +80,6 @@ func TestCheckAccrual_ReturnsCanceledContextWhenResultWriteIsCanceled(t *testing
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			info := accrual.OrderInfo{
-				Number: "12345678903",
 				Status: order.StatusProcessed,
 			}
 			client := jobsmocks.NewMockAccrualClient(t)
@@ -110,7 +109,7 @@ func TestCheckAccrual_ReturnsCanceledContextWhenResultWriteIsCanceled(t *testing
 // нашего же сбоя, хотя система расчёта ему не отказывала.
 func TestCheckAccrual_SnoozesStorageFailure(t *testing.T) {
 	storageErr := errors.New("storage")
-	info := accrual.OrderInfo{Number: "12345678903", Status: order.StatusProcessed}
+	info := accrual.OrderInfo{Status: order.StatusProcessed}
 	orders := newResultWriter(t, order.StatusProcessed, nil, false, storageErr)
 	client := newAccrualClient(t, info, nil)
 	core, logs := observer.New(zap.ErrorLevel)
@@ -125,22 +124,8 @@ func TestCheckAccrual_SnoozesStorageFailure(t *testing.T) {
 	assert.Equal(t, "12345678903", entries[0].ContextMap()["order"])
 }
 
-func TestCheckAccrual_WritesResultByOwnOrderNumber(t *testing.T) {
-	info := accrual.OrderInfo{
-		Number: "9278923470",
-		Status: order.StatusProcessing,
-	}
-	orders := newResultWriter(t, order.StatusProcessing, nil, false, nil)
-	client := newAccrualClient(t, info, nil)
-
-	err := workCheckAccrual(t, client, orders, testOptions())
-
-	requireSnooze(t, err, testPollInterval)
-}
-
 func TestCheckAccrual_CancelsJobWhenOrderIsGone(t *testing.T) {
 	info := accrual.OrderInfo{
-		Number: "12345678903",
 		Status: order.StatusProcessing,
 	}
 	orders := newResultWriter(

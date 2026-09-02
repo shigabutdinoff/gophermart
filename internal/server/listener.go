@@ -4,7 +4,7 @@ import "net"
 
 // listen занимает адрес заранее, чтобы ошибка привязки вернулась сразу.
 func (s *Server) listen() error {
-	ln, err := net.Listen("tcp", s.RunAddress)
+	ln, err := net.Listen("tcp", s.runAddress)
 	if err != nil {
 		return err
 	}

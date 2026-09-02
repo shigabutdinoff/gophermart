@@ -13,7 +13,6 @@ require (
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/jonboulle/clockwork v0.5.0
 	github.com/oklog/run v1.2.0
 	github.com/osamingo/checkdigit v1.1.0
 	github.com/pressly/goose/v3 v3.26.0

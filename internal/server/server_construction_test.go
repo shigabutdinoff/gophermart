@@ -13,7 +13,7 @@ import (
 func TestNew(t *testing.T) {
 	s := mustNew(t, zap.NewNop(), config.Default())
 
-	assert.Equal(t, config.DefaultRunAddress, s.RunAddress)
+	assert.Equal(t, config.DefaultRunAddress, s.runAddress)
 	assert.Equal(t, DefaultShutdownTimeout, s.shutdownTimeout)
 	assert.NotNil(t, s.router)
 }
@@ -40,7 +40,6 @@ func TestNew_BuildsAuthDependenciesBeforeRouter(t *testing.T) {
 	assert.NotNil(t, server.deps.auth.Register)
 	assert.NotNil(t, server.deps.auth.Login)
 	assert.NotNil(t, server.deps.tokenParser)
-	assert.Empty(t, server.JWTSecret)
 }
 
 func TestNew_BuildsBalanceDependencies(t *testing.T) {

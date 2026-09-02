@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 
 	"gorm.io/gorm"
 )
@@ -22,4 +23,12 @@ func (s Session) WithContext(ctx context.Context) (*gorm.DB, error) {
 		return nil, ErrUnavailable
 	}
 	return s.db.WithContext(ctx), nil
+}
+
+// Pool отдаёт пул соединений тем, кто работает мимо gorm.
+func (s Session) Pool() (*sql.DB, error) {
+	if s.db == nil {
+		return nil, ErrUnavailable
+	}
+	return s.db.DB()
 }

@@ -2,6 +2,7 @@ package order
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -39,9 +40,9 @@ func (r orderRow) order() domain.Order {
 	}
 }
 
-// Pusher ставит задание на опрос расчёта в очередь.
+// Pusher ставит задание на опрос расчёта в переданную транзакцию.
 type Pusher interface {
-	Push(ctx context.Context, tx *gorm.DB, number string) error
+	Push(ctx context.Context, tx *sql.Tx, number string) error
 }
 
 // Repository хранит заказы, номер ожидается уже нормализованным.
@@ -50,9 +51,9 @@ type Repository struct {
 	jobs    Pusher
 }
 
-// New принимает nil вместо БД, тогда репозиторий отвечает отказом.
-func New(db *gorm.DB) *Repository {
-	return &Repository{session: database.NewSession(db)}
+// New принимает нулевую сессию вместо БД, тогда репозиторий отвечает отказом.
+func New(session database.Session) *Repository {
+	return &Repository{session: session}
 }
 
 // AttachPusher один раз подключает очередь после сборки её клиента.
@@ -84,13 +85,17 @@ func (r *Repository) CreateOrFindOwner(
 	}
 
 	var outcome domain.CreateOutcome
-	err = db.Transaction(func(tx *gorm.DB) error {
+	err = database.Transact(db, func(tx database.Tx) error {
 		var err error
-		outcome, err = createOrFindOwner(tx, number, userID)
+		outcome, err = createOrFindOwner(tx.DB(), number, userID)
 		if err != nil || outcome != domain.Created {
 			return err
 		}
-		if err := r.jobs.Push(ctx, tx, number); err != nil {
+		sqlTx, err := tx.SQL()
+		if err != nil {
+			return err
+		}
+		if err := r.jobs.Push(ctx, sqlTx, number); err != nil {
 			return fmt.Errorf("dispatch accrual check: %w", err)
 		}
 
@@ -128,6 +133,11 @@ func createOrFindOwner(tx *gorm.DB, number string, userID int64) (domain.CreateO
 		Select("user_id").
 		Where("number = ?", number).
 		Take(&stored).Error; err != nil {
+		// строку только что перехватил конкурент и она уже удалена
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			err = domain.ErrNotFound
+		}
+
 		return 0, fmt.Errorf("find order owner: %w", err)
 	}
 	if stored.UserID == userID {

@@ -14,7 +14,7 @@ import (
 )
 
 func TestLogin_UnknownLoginAndWrongPasswordShareBody(t *testing.T) {
-	deps := loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials, nil)
+	deps := loginReturning(auth.IssuedToken{}, auth.ErrInvalidCredentials)
 	handler := newRouter(zap.NewNop(), deps)
 
 	bodies := make([]string, 0, 2)
@@ -44,7 +44,7 @@ func TestLogin_MapsAllOutcomes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := serveLogin(
-				loginReturning(tt.token, tt.err, nil),
+				loginReturning(tt.token, tt.err),
 				"application/json",
 				`{"login":"user","password":"password"}`,
 			)

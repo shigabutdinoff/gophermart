@@ -45,7 +45,7 @@ func TestWithdrawalsReturnsUserHistoryAsJSON(t *testing.T) {
 		ProcessedAt: time.Date(2026, time.August, 28, 12, 34, 56, 0, time.UTC),
 	}}, nil, &userID)
 
-	response := serveWithdrawals(newRouter(zap.NewNop(), deps, testUserID))
+	response := serveWithdrawals(newRouter(zap.NewNop(), deps))
 
 	require.Equal(t, http.StatusOK, response.Code)
 	assert.Equal(t, "application/json", response.Header().Get("Content-Type"))
@@ -57,9 +57,7 @@ func TestWithdrawalsReturnsNoContentForEmptyHistory(t *testing.T) {
 	for _, withdrawals := range [][]domain.Withdrawal{nil, {}} {
 		response := serveWithdrawals(newRouter(
 			zap.NewNop(),
-			listReturning(withdrawals, nil, nil),
-			testUserID,
-		))
+			listReturning(withdrawals, nil, nil)))
 
 		assert.Equal(t, http.StatusNoContent, response.Code)
 		assert.Empty(t, response.Body.Bytes())
@@ -88,9 +86,7 @@ func TestWithdrawalsLogsInternalError(t *testing.T) {
 
 	response := serveWithdrawals(newRouter(
 		zap.New(core),
-		listReturning(nil, storageErr, nil),
-		testUserID,
-	))
+		listReturning(nil, storageErr, nil)))
 
 	require.Equal(t, http.StatusInternalServerError, response.Code)
 	assert.Contains(t, response.Body.String(), message.Internal)

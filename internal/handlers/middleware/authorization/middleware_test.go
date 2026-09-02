@@ -20,8 +20,6 @@ import (
 	"github.com/shigabutdinoff/gophermart/internal/handlers/route/message"
 )
 
-var middlewareTestNow = time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
-
 type middlewareResult struct {
 	response      *httptest.ResponseRecorder
 	request       *http.Request
@@ -290,8 +288,8 @@ func TestMiddleware_RejectsMissingInvalidOrNonpositiveCredentials(t *testing.T) 
 			configure: func(r *http.Request) {
 				r.Header.Set("Authorization", "Bearer "+signedToken(map[string]any{
 					auth.UserIDClaim: int64(7),
-					"iat":            middlewareTestNow.Add(-2 * time.Hour).Unix(),
-					"exp":            middlewareTestNow.Add(-time.Hour).Unix(),
+					"iat":            time.Now().Add(-2 * time.Hour).Unix(),
+					"exp":            time.Now().Add(-time.Hour).Unix(),
 				}))
 			},
 		},
@@ -314,8 +312,8 @@ func TestMiddleware_RejectsMissingInvalidOrNonpositiveCredentials(t *testing.T) 
 			name: "missing user id",
 			configure: func(r *http.Request) {
 				r.Header.Set("Authorization", "Bearer "+signedToken(map[string]any{
-					"iat": middlewareTestNow.Unix(),
-					"exp": middlewareTestNow.Add(time.Hour).Unix(),
+					"iat": time.Now().Unix(),
+					"exp": time.Now().Add(time.Hour).Unix(),
 				}))
 			},
 		},
@@ -462,7 +460,7 @@ func testSecret() []byte {
 func testManager(t *testing.T) *auth.JWTManager {
 	t.Helper()
 
-	manager, err := auth.NewJWTManager(testSecret(), func() time.Time { return middlewareTestNow })
+	manager, err := auth.NewJWTManager(testSecret())
 	require.NoError(t, err)
 
 	return manager
@@ -480,8 +478,8 @@ func issuedToken(t *testing.T, userID int64) string {
 func validClaims(userID int64) map[string]any {
 	return map[string]any{
 		auth.UserIDClaim: userID,
-		"iat":            middlewareTestNow.Unix(),
-		"exp":            middlewareTestNow.Add(time.Hour).Unix(),
+		"iat":            time.Now().Unix(),
+		"exp":            time.Now().Add(time.Hour).Unix(),
 	}
 }
 

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -16,11 +15,10 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 
 	config "github.com/shigabutdinoff/gophermart/internal/config/gophermart"
 	"github.com/shigabutdinoff/gophermart/internal/repository/database"
+	"github.com/shigabutdinoff/gophermart/internal/repository/testkit"
 )
 
 const unavailableDatabaseDSN = "postgresql://postgres:postgres@localhost:1/praktikum?sslmode=disable"
@@ -44,11 +42,11 @@ func newObservedServer(t *testing.T, dsn string) (*Server, *observer.ObservedLog
 
 func newServerWithDatabase(t *testing.T) (*Server, *sql.DB) {
 	t.Helper()
-	gormDB, err := database.Connection(unavailableDatabaseDSN)
+	session, err := database.Open(unavailableDatabaseDSN)
 	require.NoError(t, err)
-	sqlDB, err := gormDB.DB()
+	sqlDB, err := session.Pool()
 	require.NoError(t, err)
-	server, err := newServer(zap.NewNop(), config.Default(), time.Now, gormDB, sqlDB)
+	server, err := newServer(zap.NewNop(), config.Default(), session, sqlDB)
 	require.NoError(t, err)
 	return server, sqlDB
 }
@@ -124,21 +122,15 @@ func TestOpenDatabase_AppliesPoolLimits(t *testing.T) {
 func TestServerSharesOnePoolAcrossRepositoryMigrationsAndShutdown(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
-	gormDB, err := gorm.Open(
-		postgres.New(postgres.Config{Conn: sqlDB}),
-		&gorm.Config{DisableAutomaticPing: true, DryRun: true, TranslateError: true},
+	gormDB := testkit.OpenDryRunGORM(t, sqlDB)
+	repositoryPool := testkit.ObserveCreatePool(t, gormDB)
+
+	server, err := newServer(
+		zap.NewNop(),
+		config.Default(),
+		database.NewSession(gormDB),
+		sqlDB,
 	)
-	require.NoError(t, err)
-
-	var repositoryPool *sql.DB
-	require.NoError(t, gormDB.Callback().Create().Before("gorm:create").Register(
-		"test:observe-server-repository-pool",
-		func(tx *gorm.DB) {
-			repositoryPool, _ = tx.DB()
-		},
-	))
-
-	server, err := newServer(zap.NewNop(), config.Default(), time.Now, gormDB, sqlDB)
 	require.NoError(t, err)
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -148,7 +140,7 @@ func TestServerSharesOnePoolAcrossRepositoryMigrationsAndShutdown(t *testing.T) 
 	request.Header.Set("Content-Type", "application/json")
 	server.router.ServeHTTP(httptest.NewRecorder(), request)
 
-	assert.Same(t, sqlDB, repositoryPool)
+	assert.Same(t, sqlDB, repositoryPool())
 
 	mock.ExpectPing()
 	var migrationPool *sql.DB
@@ -166,7 +158,7 @@ func TestServerSharesOnePoolAcrossRepositoryMigrationsAndShutdown(t *testing.T) 
 
 func TestServer_Run_ClosesDatabaseOnListenError(t *testing.T) {
 	s, oldDB := newServerWithDatabase(t)
-	s.RunAddress = "bad::addr"
+	s.runAddress = "bad::addr"
 	require.Error(t, s.Run(context.Background()))
 	assert.EqualError(t, oldDB.PingContext(context.Background()), "sql: database is closed")
 }
