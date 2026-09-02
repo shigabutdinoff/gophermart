@@ -22,9 +22,17 @@ func (s *Server) Run(ctx context.Context) error {
 		defer interruptDatabaseRecovery(nil)
 	}
 
+	budget := newShutdownBudget(s.shutdownTimeout)
+	defer budget.release()
+	// свёртка идёт отложенно: ранний отказ запуска тоже гасит очередь и БД
+	defer func() {
+		shutdownCtx := budget.context()
+		s.stopQueue(shutdownCtx)
+		_ = s.closeDatabaseBeforeDeadline(shutdownCtx)
+	}()
+
 	if s.ln == nil {
 		if err := s.listen(); err != nil {
-			s.closeDatabase()
 			return err
 		}
 	}
@@ -32,16 +40,12 @@ func (s *Server) Run(ctx context.Context) error {
 	srv, err := s.newHTTPServer()
 	if err != nil {
 		_ = s.ln.Close()
-		s.closeDatabase()
 		return err
 	}
 	s.srv = srv
 
 	// пишется и читается в горутине, вызвавшей Run, гонки здесь нет
 	var shutdownErr error
-
-	budget := newShutdownBudget(s.shutdownTimeout)
-	defer budget.release()
 
 	var group run.Group
 	group.Add(func() error {
@@ -75,9 +79,6 @@ func (s *Server) Run(ctx context.Context) error {
 	if shutdownErr != nil {
 		s.logger.Error("Не удалось остановить обслуживание", zap.Error(shutdownErr))
 	}
-	shutdownCtx := budget.context()
-	s.stopQueue(shutdownCtx)
-	_ = s.closeDatabaseBeforeDeadline(shutdownCtx)
 
 	// неудачи остановки остаются в логе: процесс уже сворачивается, и код
 	// выхода не должен отличать штатный сигнал от затянувшегося дренажа
